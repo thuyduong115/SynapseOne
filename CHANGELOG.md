@@ -5,6 +5,34 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Added — AWS-style token management & central authorization
+- **Central policy enforcement at the gateway** (`AUTHZ_MODE=off|audit|enforce`,
+  `AUTHZ_CACHE_TTL_MS`): every authenticated request on a route with a `service:` in
+  `routes.yaml` is mapped to `<service>:<Verb>` (GET/HEAD=Read, DELETE=Delete, else
+  Write; RPC overrides such as `POST …/query` → `base:Read`) on
+  `arn:synapsedx:<org>:<account>:<service>:<path>` and decided by IAM
+  (`POST /internal/authorize`, gateway-only). `enforce` → `403 access_denied`
+  (fail-closed `503` when IAM is down); `audit` → `x-synapsedx-authz: would-deny`
+  header. Denials are audited. Compose/K8s default to `audit`.
+- **IAM**: organization administrators (first user of an org; migration `0002`
+  backfills existing users), `PUT /v1/users/:id/org-admin`; AWS-style managed policies
+  (`GET /v1/managed-policies`, `POST …/policies {managed}`); service-account roles
+  (`GET/POST/DELETE /v1/service-accounts/:id/roles`); API keys: scopes enforced,
+  owner-bound keys inherit their user's policies, `last_used_at`, rotation with grace
+  period (`POST /v1/keys/:id/rotate`); sessions (`GET/DELETE /v1/auth/sessions[/:id]`).
+- **Synapse Storage** (`apps/storage-service`, :4010, gateway `/v1/storage`): tenant-scoped
+  buckets and objects on any S3-compatible backend (S3Mock in compose, SeaweedFS/AWS S3 in
+  production), prefix/delimiter/cursor listing, ETag/304, safe content serving
+  (CSP sandbox, attachment by default), HMAC-signed download/upload links through the
+  gateway (`/v1/storage/signed/:token`), Prometheus metrics, compose/prod/K8s wiring.
+- **Clients**: `client.storage` + token-management methods in the JS/Python SDKs, Go
+  `CreateBucket`/`PutObject`/`PresignDownload`/`RotateAPIKey`/…; CLI `storage`,
+  `sessions`, `org-admin`, `managed-policies`, `keys rotate`, `sa grant`; Console
+  *Synapse Storage* page, key rotation/scopes/owner/last-used + sessions on *API Keys*,
+  managed-policy picker on *Policies*.
+- **Tests**: IAM principal authorization suite, gateway authz suite, storage API suite,
+  SDK suites, and the Docker-free `tests/e2e/iam-storage-smoke.mjs` (CI).
+
 ## [0.6.2] - 2026-10-27
 
 ### Added — SynapseStream & Full Multi-SDK Coverage

@@ -23,9 +23,10 @@ standard OIDC. Everything else is SynapseDX code, pure Apache-2.0.
 | Capability | What you get |
 |---|---|
 | **API Gateway** | Single entry point: JWT/API-key auth, principal propagation (`x-synapsedx-*`), edge rate limiting, tracing, aggregate `/ready`, Prometheus `/metrics` |
-| **AWS-style IAM** | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), `authorize` API + dry-run simulator + audit log, tenant isolation on every write (role-based, same-org fallback) |
-| **Flexible identity** | Short-lived JWT, atomic rotating refresh tokens, API keys, service accounts, and real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
+| **AWS-style IAM** | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), org administrators, managed policies (`AdministratorAccess`, `ReadOnlyAccess`, …), **central enforcement at the gateway** (`AUTHZ_MODE=audit/enforce`: every request → `service:Verb` on an ARN), `authorize` API + dry-run simulator + audit log |
+| **Token management** | Short-lived JWT, atomic rotating refresh tokens with per-session revoke, scoped + owner-bound API keys (last-used, zero-downtime rotation), service accounts with roles, real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
 | **Core data** | Postgres (source of truth) + Redis + S3-compatible object storage, versioned schema, idempotent seed |
+| **Synapse Storage** | Unstructured data: tenant-scoped buckets, binary objects, prefix listing, HMAC-signed download/upload links served through the gateway, safe content serving; any S3 backend (S3Mock, SeaweedFS, AWS S3) (`/v1/storage`) |
 | **SynapseBase** | Self-managed document database: collections, object↔data mapping with validation, filters/cursors, optimistic concurrency, atomic counters, batches and a change feed (`/v1/base`) |
 | **Synapse Faststore** | Redis-backed cache/KV and data structures: TTL strings, counters, hashes, lists, sets, sorted sets, scans, batches and distributed locks (`/v1/faststore`) |
 | **SynapseQueue** | At-least-once messaging: delayed/deduplicated publishing, visibility-timeout leases, ack/nack/heartbeat, retries, dead letters and replay (`/v1/queue`) |
@@ -103,7 +104,7 @@ per service namespace (`c.iam`, `c.workflow`, `c.lds`, `c.base`, `c.faststore`,
 cp .env.example .env   # then replace every *_change_me_* secret
 docker compose up -d --build
 curl localhost:8080/health && curl localhost:4001/health && curl localhost:4002/health
-curl localhost:4005/health && curl localhost:4006/health && curl localhost:4007/health
+curl localhost:4005/health && curl localhost:4006/health && curl localhost:4007/health && curl localhost:4010/health
 open http://localhost:3000   # sign in: demo@acme.local / org acme
 ```
 
@@ -120,6 +121,8 @@ Production (TLS, edge rate limiting, hardened secrets): `docker-compose.prod.yml
 | Base | `http://localhost:4005` | Internal — SynapseBase documents + mapping (behind gateway in prod) |
 | Faststore | `http://localhost:4006` | Internal — cache/KV/data structures (behind gateway in prod) |
 | Queue | `http://localhost:4007` | Internal — SynapseQueue messaging (behind gateway in prod) |
+| Stream | `http://localhost:4009` | Internal — SynapseStream event log (behind gateway in prod) |
+| Storage | `http://localhost:4010` | Internal — Synapse Storage objects + signed links (behind gateway in prod) |
 
 ## Architecture
 
@@ -129,7 +132,9 @@ Client → Gateway :8080 ─┬─► IAM :4001       (Org/Account/Role/Policy +
                          ├─► LDS :4004       (licensed NGSI-LD exports)
                          ├─► Base :4005      (documents + object↔data mapping)
                          ├─► Faststore :4006 (cache/KV/data structures)
-                         └─► Queue :4007     (at-least-once messaging)
+                         ├─► Queue :4007     (at-least-once messaging)
+                         ├─► Stream :4009    (event log, consumer groups)
+                         └─► Storage :4010   (objects, signed links → S3 API)
                          Postgres :5432 / Redis :6379 / S3-compatible :9090
 ```
 
@@ -147,6 +152,8 @@ apps/lds-service           SynapseLDS — NGSI-LD datasources, registry, license
 apps/base-service          SynapseBase — documents, mapping, queries, change feed
 apps/faststore-service     Synapse Faststore — cache/KV, data structures, locks
 apps/queue-service         SynapseQueue — publish/consume, leases, retries, DLQ
+apps/stream-service        SynapseStream — event log, consumer groups, replay
+apps/storage-service       Synapse Storage — buckets, objects, signed links (S3 API)
 sdks/sdk-js                @synapsedx/sdk (TypeScript, zero runtime deps)
 sdks/sdk-python            synapsedx-sdk (Python, requests only)
 sdks/sdk-go                synapsedx-sdk-go (Go, stdlib only)
@@ -173,7 +180,7 @@ docs                       Start at docs/README.md
 | `docs/configuration.md` | Every environment variable |
 | `docs/production.md` | Production checklist (secrets, TLS, edge) |
 | `docs/console.md` | Operating the Console |
-| `docs/object-storage.md` | S3-compatible storage backends |
+| `docs/object-storage.md` | Synapse Storage + S3-compatible backends (S3Mock, SeaweedFS, AWS S3) |
 | `docs/troubleshooting.md` | Common failures and fixes |
 
 ## Common commands

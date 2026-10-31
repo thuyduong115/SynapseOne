@@ -43,7 +43,9 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
 - `POST /v1/auth/logout {refreshToken}` → `{ok}`
 - `POST /v1/auth/logout-all {refreshToken}` → `{ok, revoked}` (revokes all of your own sessions)
 - `GET /v1/auth/verify` (Bearer or X-API-Key) → `{valid, ...}`
-- `GET /v1/auth/me` (Bearer) → `{user, kind}`
+- `GET /v1/auth/me` (Bearer) → `{user, kind}` (`user.is_org_admin` tells whether the caller administers its org)
+- `GET /v1/auth/sessions` (user Bearer) → `[{id, created_at, expires_at}]` — your active sessions (one per live refresh token), newest first
+- `DELETE /v1/auth/sessions/:id` (user Bearer) → `{ok}` — revoke one session (its refresh token stops working); other users' ids → `404`
 - `GET /v1/auth/oidc/config` → `{issuer, clientId, redirectUri, codeExchange, ...}`
 - `GET /v1/auth/oidc/start?org=acme` → `{authorizeUrl, state}` (state is HMAC-signed, 10-minute expiry)
 - `POST /v1/auth/oidc/callback {code, state}` → token set (**real** Authorization Code
@@ -64,6 +66,52 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
 - `POST /v1/orgs/:orgId/users {email, displayName}`
 
 ## Roles / Policies / Authorize
+
+Organization administrators: the **first user of an organization** (the one whose
+login creates it, or the first login into an org without admins) becomes its
+administrator — AWS "root"-like, full access inside its own org unless a policy
+explicitly denies. Every later user starts with **no permissions** and is granted
+roles. Existing users are backfilled as admins by IAM migration `0002`.
+
+- `PUT /v1/users/:userId/org-admin {isOrgAdmin}` → user — only an admin of the same
+  org may call it (`403 org_admin_required`); demoting the last admin → `409 last_admin`
+- `GET /v1/managed-policies` → `[{name, description, document}]` — AWS-style managed
+  policies: `AdministratorAccess`, `PowerUserAccess` (everything except `iam:*`),
+  `ReadOnlyAccess`, `StorageFullAccess`, `StorageReadOnlyAccess`, `DataFullAccess`
+- `POST /v1/accounts/:accountId/policies {slug, managed: "ReadOnlyAccess"}` — instantiate
+  a managed policy in an account (send `managed` **or** `document`, not both)
+
+### Central enforcement (gateway, `AUTHZ_MODE`)
+
+With `AUTHZ_MODE=audit|enforce` the gateway authorizes **every authenticated request**
+on a route that declares a `service` in `apps/gateway/routes.yaml`:
+
+| Request | Action | Resource |
+|---|---|---|
+| `GET` / `HEAD` | `<service>:Read` | `arn:synapsedx:<org>:<account>:<service>:<path after /v1/<service>/>` |
+| `DELETE` | `<service>:Delete` | same (`-` when the principal has no org/account) |
+| other methods | `<service>:Write` | same |
+| RPC-style overrides | `POST …/query` → `base:Read`, `POST /v1/workflows/:id/execute` → `workflow:Execute`, `POST /v1/ai/*` → `ai:Invoke`, … | same |
+
+Services: `iam`, `workflow`, `ai`, `inference`, `lds`, `base`, `faststore`, `queue`,
+`stream`, `storage`. The decision combines three layers, all of which must allow:
+
+1. **Credential scopes** — API-key / service-account token scopes are action patterns
+   (`*`, `storage:*`, `workflow:Execute`) that cap the credential (like an AWS session policy).
+2. **Identity policies** — policies on the roles of the owning user / service account
+   (explicit `Deny` > `Allow` > default deny). An API key created with `userId`
+   inherits that user's permissions; a key without an owner, and a service account
+   without roles, are bounded by their scopes alone (backward compatible).
+3. **Org administrators** — allowed unless explicitly denied.
+
+`enforce` returns `403 {error:"access_denied", action, resource, reason}` and fails
+closed (`503 authz_unavailable`) when IAM is unreachable; `audit` lets the request
+through and adds `x-synapsedx-authz: would-deny; action=…; reason=…`. Both modes write
+denials to `GET /v1/audit` (`actor_type` = `user|service-account|apikey`,
+`context.enforcement = "gateway"`). Decisions are cached per principal/action/resource
+for `AUTHZ_CACHE_TTL_MS` (default 30 s). `reason` is one of `org-admin`,
+`policy-allow`, `scope-only`, `explicit-deny`, `implicit-deny`, `scope-deny`,
+`unknown-principal`.
 
 - `POST /v1/accounts/:accountId/roles {slug, description}`
 - `GET /v1/accounts/:accountId/roles`
@@ -93,14 +141,23 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
 
 - `POST /v1/accounts/:accountId/keys {name, scopes, expiresInSeconds?}` → `{apiKey (shown once), id, prefix}`
 - `GET /v1/accounts/:accountId/keys` → key metadata list (id/name/prefix/scopes/expiry/revoked — never secret values)
-- `POST /v1/keys/verify {apiKey}` → `{valid, account_id, scopes}`
+- `POST /v1/keys/verify {apiKey}` → `{valid, id, account_id, user_id, scopes}`
 - `DELETE /v1/keys/:id` → revokes the key
+- `POST /v1/keys/:id/rotate {graceSeconds?}` → `{id, apiKey (shown once), prefix, rotatedFrom, oldKeyExpiresAt}` (201) —
+  the new key keeps the owner, name, scopes and expiry; the old key is revoked immediately
+  (`graceSeconds` 0, default) or stays valid for up to 7 days for a zero-downtime switch;
+  revoked/expired keys → `409 key_inactive`
+- Key listings include `user_id` (owner, null for account-level keys) and `last_used_at`
+  (stamped on verification, at most once per minute)
 
 ## Service accounts (machine identity)
 
 - `POST /v1/accounts/:accountId/service-accounts {slug, description}` → service account
 - `GET /v1/accounts/:accountId/service-accounts` → list
 - `POST /v1/service-accounts/:id/token {scopes?}` → `{accessToken (kind=service-account), expiresIn}`
+- `GET /v1/service-accounts/:id/roles` → roles granted to the service account
+- `POST /v1/service-accounts/:id/roles {roleId}` → `{ok}` (role must be in the SA's account — `403 cross_account`)
+- `DELETE /v1/service-accounts/:id/roles/:roleId` → `{ok}` (`404 assignment_not_found` when not granted)
 
 ## Credentials (PROPOSED contract — backend in progress, do not rely on yet)
 
@@ -438,6 +495,45 @@ attempts, so consumers must be idempotent. `maxAttempts` 1..100 (default 5),
 visibility 1..3600s (default 30), delay ≤7 days, consume/ack/publish batch ≤100,
 payload ≤ `QUEUE_MAX_PAYLOAD_BYTES` (default 256 KiB). Dedupe suppresses duplicates
 only while the original message still exists.
+
+## Storage — object storage (`storage-service:4010`, gateway `/v1/storage`)
+
+Unstructured data (files, images, documents) on any S3-compatible backend (S3Mock in
+dev, SeaweedFS or AWS S3 in production; in-memory without `S3_ENDPOINT`). Buckets are
+**logical and per tenant** (org > account > user), so two orgs can both own `documents`.
+Actions for central enforcement: `storage:Read`, `storage:Write`, `storage:Delete`.
+
+- `GET /v1/storage/stats` → `{backend, buckets, maxObjectBytes, maxBuckets}`
+- `GET /v1/storage/buckets` → `[{name, visibility, maxObjectBytes, createdAt, createdBy}]`
+- `POST /v1/storage/buckets {name, maxObjectBytes?}` → bucket (201); name `^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`; `409 bucket_exists` / `bucket_limit`
+- `GET /v1/storage/buckets/:bucket` → bucket config
+- `DELETE /v1/storage/buckets/:bucket[?force=true]` → `{deleted, objectsDeleted}`; non-empty without `force` → `409 bucket_not_empty`
+- `GET /v1/storage/buckets/:bucket/objects?prefix=&delimiter=/&cursor=&limit=` → `{items:[{key,size,etag,lastModified}], prefixes, nextCursor}`
+- `PUT /v1/storage/buckets/:bucket/objects/:key` (raw body; `Content-Type` is stored) → `{bucket,key,size,etag,contentType,lastModified}` (201).
+  Keys may contain `/`; `..`/`.` segments, backslashes, control chars and a leading `/` are rejected.
+  Larger than the bucket limit (default `STORAGE_MAX_OBJECT_BYTES` = 25 MiB) → `413 object_too_large`
+- `GET /v1/storage/buckets/:bucket/objects/:key` (also `HEAD`) → bytes with `ETag`, `Last-Modified`,
+  `Content-Type`, `Content-Disposition` (`inline` only for images/PDF/text/JSON/media,
+  otherwise `attachment`) and `Content-Security-Policy: default-src 'none'; sandbox`;
+  `If-None-Match` → `304`
+- `DELETE /v1/storage/buckets/:bucket/objects/:key` → `{deleted}`
+- `POST /v1/storage/buckets/:bucket/presign-download {key, expiresIn?}` → `{method:"GET", url, path, expiresAt}` (201) — requires `storage:Read`
+- `POST /v1/storage/buckets/:bucket/presign-upload {key, contentType?, expiresIn?}` → `{method:"PUT", url, path, contentType, maxBytes, expiresAt}` — requires `storage:Write`
+- `GET /v1/storage/signed/:token` (also `HEAD`) and `PUT /v1/storage/signed/:token` — **no credentials**:
+  the HMAC-SHA256 signature (`STORAGE_SIGNING_SECRET`) pins tenant, bucket, key, method,
+  expiry (default 900 s, max `STORAGE_SIGNED_URL_MAX_TTL` = 7 days) and, for uploads, the
+  `Content-Type`. Tampered/expired/wrong-method links → `403 invalid_signature`.
+  Links are served through the gateway, so the S3 backend never needs to be public;
+  set `STORAGE_PUBLIC_BASE_URL` to get absolute `url`s.
+
+```bash
+GW=localhost:8080; H="Authorization: Bearer $TOK"
+curl -s -XPOST $GW/v1/storage/buckets -H"$H" -H'Content-Type: application/json' -d '{"name":"documents"}'
+curl -s -XPUT  $GW/v1/storage/buckets/documents/objects/reports/q3.pdf -H"$H" -H'Content-Type: application/pdf' --data-binary @q3.pdf
+LINK=$(curl -s -XPOST $GW/v1/storage/buckets/documents/presign-download -H"$H" -H'Content-Type: application/json' \
+  -d '{"key":"reports/q3.pdf","expiresIn":600}' | jq -r .path)
+curl -s "$GW$LINK" -o q3-copy.pdf   # no token needed
+```
 
 ## Usage analytics & request telemetry (`iam-service`, gateway `/v1/usage`)
 

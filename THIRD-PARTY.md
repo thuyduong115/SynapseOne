@@ -14,7 +14,8 @@ the upstream project's own `LICENSE` file.
 | Keycloak | Apache-2.0 | OIDC (alternative IdP) | Supported as alternative upstream IdP; no image pinned in compose. |
 | PostgreSQL (`postgres:16-alpine`) | PostgreSQL Licence (permissive) | Container image + `pg` driver (MIT) | System of record for IAM. |
 | Redis (`redis:7-alpine`) | RSALv2/SSPL depending on distribution | Container image + `ioredis` (MIT) | Rate-limit store + Authentik cache. Check your Redis distribution's license. |
-| Adobe S3Mock (`adobe/s3mock`) | Apache-2.0 | Container image (local/dev object storage) | Default S3-compatible backend for local/dev; production may point at MinIO/AWS S3 instead. |
+| Adobe S3Mock (`adobe/s3mock`) | Apache-2.0 | Container image (local/dev object storage) | Default S3-compatible backend behind Synapse Storage for local/dev. |
+| SeaweedFS (`chrislusf/seaweedfs`, optional prod S3 backend) | Apache-2.0 | Container image (optional, over the S3 API) | Recommended self-hosted production backend for Synapse Storage (`docs/object-storage.md`). |
 | Prometheus (`prom/prometheus`) | Apache-2.0 | Container image + scrape API | Metrics store for `infra/monitoring` (scrapes gateway/PG/Redis). |
 | postgres-exporter (`prometheuscommunity/postgres-exporter`) | Apache-2.0 | Container image | PG metrics for Prometheus. |
 | redis-exporter (`oliver006/redis_exporter`) | MIT | Container image | Redis metrics for Prometheus. |
@@ -27,7 +28,8 @@ the upstream project's own `LICENSE` file.
 
 - Node.js services (`apps/*`, `tools/cli`, `sdks/sdk-js`): Express, jsonwebtoken,
   http-proxy-middleware, express-rate-limit, ioredis, js-yaml, cors, morgan,
-  prom-client, zod, pg, dotenv — MIT/ISC/Apache-2.0/BSD. Exact resolved tree + licenses:
+  prom-client, zod, pg, dotenv — MIT/ISC/Apache-2.0/BSD; `apps/storage-service` adds the
+  AWS SDK for JavaScript v3 (`@aws-sdk/client-s3`, Apache-2.0) as its S3 protocol client. Exact resolved tree + licenses:
   each `package-lock.json` (run `npx license-checker --summary` per workspace for a report).
 - Console (`apps/console`): React + Vite + Tailwind — MIT; FontAwesome icons
   (`@fortawesome/*` — MIT, except `free-solid-svg-icons` dual `CC-BY-4.0 AND MIT`:

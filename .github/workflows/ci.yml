@@ -23,6 +23,8 @@ jobs:
       - run: npm run test --workspaces --if-present
       # API catalog drift gate (console try-it + AI agent + docs/api.md).
       - run: node tools/catalog-check.mjs
+      # Docker-free gateway+IAM+storage smoke (AUTHZ_MODE=enforce, AWS-style flow).
+      - run: node tests/e2e/iam-storage-smoke.mjs
       # Prod-dep audit: fails only on CRITICAL (the known HIGH `braces` advisory is
       # accepted + tracked in SECURITY.md — fix would be a breaking downgrade).
       # Root-level audit covers the whole workspace tree via the root lockfile.

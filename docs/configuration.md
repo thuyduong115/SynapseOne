@@ -15,6 +15,10 @@ reads which key (audited from source):
 | `BASE_SERVICE_URL` | `http://base:4005` | SynapseBase upstream |
 | `FASTSTORE_SERVICE_URL` | `http://faststore:4006` | Synapse Faststore upstream |
 | `QUEUE_SERVICE_URL` | `http://queue:4007` | SynapseQueue upstream |
+| `STREAM_SERVICE_URL` | `http://stream:4009` | SynapseStream upstream (also probed by `/ready` when set) |
+| `STORAGE_SERVICE_URL` | `http://storage:4010` | Synapse Storage upstream (also probed by `/ready` when set) |
+| `AUTHZ_MODE` | `off` (code) / `audit` (compose) | central policy enforcement: `off` = tenant isolation only; `audit` = decide every authenticated request via IAM, log + header `x-synapsedx-authz: would-deny`, never block; `enforce` = `403 access_denied`, IAM unreachable → `503 authz_unavailable` |
+| `AUTHZ_CACHE_TTL_MS` | 30000 | decision cache per principal/action/resource (0 disables, max 300000) — policy changes take effect after at most this long |
 | `IAM_JWT_SECRET` | — | **must match** IAM, used to verify Bearer tokens |
 | `GATEWAY_ROUTES_PATH` | `./routes.yaml` | routing table |
 | `GATEWAY_VERIFY_APIKEY` | `true` | `true` → centralized `X-API-Key` verification via IAM (fail-closed 503 when IAM is down); `false` → edge presence check, upstream verifies (dev-only, forbidden in production) |
@@ -110,6 +114,23 @@ attributes default-deny; visibility is resolved at read time from the registry
 | `SYNAPSEDX_INTERNAL_SECRET` | — (dev) | requires a matching `x-synapsedx-internal` header on every `/v1/*` — blocks direct `:4006` bypass |
 | `HSTS_ENABLED` / `CORS_ORIGIN` | `false` / — | same semantics as the other services |
 | `FASTSTORE_SERVICE_HOST_PORT` | `127.0.0.1:4006` | compose host binding |
+
+## Storage — Synapse Storage (`apps/storage-service`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `PORT` | 4010 | listen port (gateway routes `/v1/storage` auth `either`, `/v1/storage/signed` auth `none`) |
+| `S3_ENDPOINT` | — (memory) | S3-compatible endpoint (S3Mock, SeaweedFS, AWS S3); **required in production** |
+| `S3_BUCKET` / `S3_REGION` | `synapsedx-core` / `us-east-1` | backend bucket (must exist) and region |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | — | backend credentials |
+| `STORAGE_MAX_OBJECT_BYTES` | 26214400 | max object size (25 MiB; clamped 1 KiB..1 GiB) |
+| `STORAGE_MAX_BUCKETS` | 100 | buckets per tenant |
+| `STORAGE_SIGNED_URL_MAX_TTL` | 604800 | max lifetime of a signed link (seconds) |
+| `STORAGE_SIGNING_SECRET` | falls back to `SYNAPSEDX_INTERNAL_SECRET` | HMAC key for signed links; ≥32 chars in production |
+| `STORAGE_PUBLIC_BASE_URL` | — | absolute base (e.g. `https://api.example.com`) for signed `url`s; empty = gateway-relative `path` only |
+| `SYNAPSEDX_INTERNAL_SECRET` | — (dev) | requires a matching `x-synapsedx-internal` header on every `/v1/*` |
+| `HSTS_ENABLED` / `CORS_ORIGIN` | `false` / — | same semantics as the other services |
+| `STORAGE_SERVICE_HOST_PORT` | `127.0.0.1:4010` | compose host binding |
 
 ## Queue — SynapseQueue (`apps/queue-service`)
 

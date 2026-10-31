@@ -1,5 +1,19 @@
 # Roadmap
 
+## v0.6.x (current)
+- [x] Synapse Inference Engine (:4008), SynapseStream (:4009), full SDK coverage
+- [x] **Central policy enforcement** at the gateway (`AUTHZ_MODE=off|audit|enforce`):
+      every authenticated request → `<service>:<Verb>` on an ARN, decided by IAM for
+      users, service accounts and API keys; denials audited
+- [x] **Token management**: API-key scopes enforced, owner-bound keys, `last_used_at`,
+      zero-downtime rotation, per-session revoke, org administrators, AWS-style managed
+      policies, service-account roles
+- [x] **Synapse Storage** (:4010, `/v1/storage`): tenant buckets, objects, HMAC-signed
+      links via the gateway, S3Mock/SeaweedFS/AWS S3 backends, SDKs + CLI + Console
+- [ ] Guardrail policies per org/account (AWS SCP-like) and STS-style AssumeRole
+- [ ] Unify API-key tenancy with the owning org (keys currently resolve to the account tenant)
+- [ ] Storage quotas per tenant + multipart uploads for very large objects
+
 ## v0.5 (this release) ✅
 - [x] **SynapseBase** (:4005, `/v1/base`): document collections, object↔data
       mapping with validation, filters/ordering/cursors, `ifVersion`, atomic
@@ -34,9 +48,10 @@
 ## v0.2 (next)
 - [x] Real OIDC Authorization Code flow (dependency-free: discovery + JWKS ID-token
       verification in IAM, HMAC-signed state, Console `/oidc/callback` round-trip)
-- [ ] Enforce API-key scopes at gateway (central) + audit retention job
+- [x] Enforce API-key scopes at gateway (central) — done in v0.6.x (`AUTHZ_MODE`)
+- [ ] Audit retention job
 - [x] License check in CI (zero-dep copyleft gate `tools/license-check.cjs` + SBOM artifact + `pip-licenses` fail-on GPL) — tree verified clean (290 pkgs: MIT/Apache-2.0/ISC/BSD, no GPL/AGPL)
-- [ ] S3Bucket abstraction API (presigned URLs, MinIO/real-S3 backend swap via env)
+- [x] S3 bucket API (signed URLs, backend swap via env) — done in v0.6.x as Synapse Storage
 - [ ] n8n credential auto-provisioning + execution webhooks → synapsedx events
 - [ ] e2e with real Postgres (testcontainers) + load test gateway
 - [ ] Helm chart + production hardening guide

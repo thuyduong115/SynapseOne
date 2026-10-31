@@ -10,7 +10,7 @@
 | [faststore.md](faststore.md) | Synapse Faststore — cache, key/value, hashes, lists, sets, locks |
 | [queue.md](queue.md) | SynapseQueue — publish, consume, leases, retries, dead letters |
 | [configuration.md](configuration.md) | Environment table for the whole stack |
-| [object-storage.md](object-storage.md) | S3 backends (default S3Mock, MinIO/S3 in prod) |
+| [object-storage.md](object-storage.md) | Synapse Storage — buckets, objects, signed links; S3 backends (S3Mock, SeaweedFS, AWS S3) |
 | [troubleshooting.md](troubleshooting.md) | Busy ports, Windows curl, gateway 404s, backup/restore, OIDC errors |
 | [console.md](console.md) | Management UI (run, configure, SSO, frontend dev) |
 | [ai-assistant.md](ai-assistant.md) | AI testing assistant (agent design, models, limits, chatbot) |
