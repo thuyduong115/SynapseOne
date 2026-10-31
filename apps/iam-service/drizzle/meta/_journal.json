@@ -15,6 +15,13 @@
       "when": 1792563659203,
       "tag": "0001_true_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793462014319,
+      "tag": "0002_org_admin_sa_roles",
+      "breakpoints": true
     }
   ]
 }

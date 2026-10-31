@@ -15,7 +15,7 @@ import * as schema from './schema';
 
 export interface Organization { id: string; slug: string; display_name: string; created_at?: string }
 export interface Account { id: string; org_id: string; slug: string; display_name: string }
-export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string }
+export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string; is_org_admin?: boolean }
 export interface Role { id: string; account_id: string; slug: string; description?: string }
 export interface PolicyDoc { Version?: string; Statement: Array<{ Effect: 'Allow'|'Deny'; Action: string|string[]; Resource: string|string[]; Condition?: any }> }
 export interface Policy { id: string; account_id: string; slug: string; description?: string; document: PolicyDoc }
@@ -70,6 +70,7 @@ const mem = {
   apiKeys: new Map<string, any>(), // hash -> record
   refresh: new Map<string, any>(),
   serviceAccounts: new Map<string, any>(),
+  serviceAccountRoles: new Map<string, Set<string>>(), // serviceAccountId -> roleIds
   usage: [] as any[], // request/feature usage events (schedule from gateway)
 };
 
@@ -109,8 +110,8 @@ function orgRow(r: { id: string; slug: string; displayName: string; createdAt?: 
 function accountRow(r: { id: string; orgId: string; slug: string; displayName: string }): Account {
   return { id: r.id, org_id: r.orgId, slug: r.slug, display_name: r.displayName };
 }
-function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null }): User {
-  return { id: r.id, org_id: r.orgId, email: r.email, display_name: r.displayName ?? undefined, external_sub: r.externalSub ?? undefined };
+function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null; isOrgAdmin?: boolean | null }): User {
+  return { id: r.id, org_id: r.orgId, email: r.email, display_name: r.displayName ?? undefined, external_sub: r.externalSub ?? undefined, is_org_admin: !!r.isOrgAdmin };
 }
 function roleRow(r: { id: string; accountId: string; slug: string; description: string | null }): Role {
   return { id: r.id, account_id: r.accountId, slug: r.slug, description: r.description ?? '' };
@@ -250,12 +251,13 @@ export async function upsertUser(orgId: string, email: string, displayName?: str
         email: schema.users.email,
         displayName: schema.users.displayName,
         externalSub: schema.users.externalSub,
+        isOrgAdmin: schema.users.isOrgAdmin,
       });
     return userRow(rows[0]);
   }
   const existing = [...mem.users.values()].find((u) => u.org_id === orgId && u.email === email);
   if (existing) { existing.display_name = displayName || existing.display_name; return existing; }
-  const u: User = { id: randomUUID(), org_id: orgId, email, display_name: displayName, external_sub: externalSub };
+  const u: User = { id: randomUUID(), org_id: orgId, email, display_name: displayName, external_sub: externalSub, is_org_admin: false };
   mem.users.set(u.id, u);
   return u;
 }
@@ -410,6 +412,7 @@ export async function listUsers(orgId: string): Promise<User[]> {
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      isOrgAdmin: schema.users.isOrgAdmin,
     }).from(schema.users).where(eq(schema.users.orgId, orgId)).orderBy(asc(schema.users.email));
     return rows.map(userRow);
   }
@@ -425,6 +428,7 @@ export async function getUserById(id: string): Promise<User | null> {
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      isOrgAdmin: schema.users.isOrgAdmin,
     }).from(schema.users).where(eq(schema.users.id, id)).limit(1);
     return rows[0] ? userRow(rows[0]) : null;
   }
@@ -442,6 +446,7 @@ export async function findUserByOrgEmail(orgId: string, email: string): Promise<
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      isOrgAdmin: schema.users.isOrgAdmin,
     }).from(schema.users).where(and(
       eq(schema.users.orgId, orgId),
       eq(schema.users.email, email),
@@ -744,6 +749,97 @@ export async function getServiceAccount(id: string): Promise<ServiceAccount | nu
       : null;
   }
   return (__mem.serviceAccounts.get(id) as ServiceAccount) || null;
+}
+
+// ---------- Org administrators ----------
+
+/** Grant/revoke org-admin (AWS root-like, scoped to the user's own org). */
+export async function setOrgAdmin(userId: string, isAdmin: boolean): Promise<User | null> {
+  if (db) {
+    await ensureTables();
+    await db.update(schema.users).set({ isOrgAdmin: isAdmin }).where(eq(schema.users.id, userId));
+    return getUserById(userId);
+  }
+  const u = mem.users.get(userId);
+  if (!u) return null;
+  u.is_org_admin = isAdmin;
+  return u;
+}
+
+/** Does the org already have at least one administrator? (bootstrap rule) */
+export async function orgHasAdmin(orgId: string): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.select({ id: schema.users.id }).from(schema.users)
+      .where(and(eq(schema.users.orgId, orgId), eq(schema.users.isOrgAdmin, true))).limit(1);
+    return rows.length > 0;
+  }
+  return [...mem.users.values()].some((u) => u.org_id === orgId && u.is_org_admin);
+}
+
+// ---------- Service-account roles ----------
+
+export async function assignRoleToServiceAccount(serviceAccountId: string, roleId: string): Promise<void> {
+  if (db) {
+    await ensureTables();
+    await db.insert(schema.serviceAccountRoles).values({ serviceAccountId, roleId }).onConflictDoNothing();
+    return;
+  }
+  if (!mem.serviceAccountRoles.has(serviceAccountId)) mem.serviceAccountRoles.set(serviceAccountId, new Set());
+  mem.serviceAccountRoles.get(serviceAccountId)!.add(roleId);
+}
+
+export async function unassignRoleFromServiceAccount(serviceAccountId: string, roleId: string): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.delete(schema.serviceAccountRoles)
+      .where(and(eq(schema.serviceAccountRoles.serviceAccountId, serviceAccountId), eq(schema.serviceAccountRoles.roleId, roleId)))
+      .returning({ roleId: schema.serviceAccountRoles.roleId });
+    return rows.length > 0;
+  }
+  return mem.serviceAccountRoles.get(serviceAccountId)?.delete(roleId) || false;
+}
+
+export async function rolesForServiceAccount(serviceAccountId: string): Promise<Role[]> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.select({
+      id: schema.roles.id,
+      accountId: schema.roles.accountId,
+      slug: schema.roles.slug,
+      description: schema.roles.description,
+    }).from(schema.roles)
+      .innerJoin(schema.serviceAccountRoles, eq(schema.serviceAccountRoles.roleId, schema.roles.id))
+      .where(eq(schema.serviceAccountRoles.serviceAccountId, serviceAccountId))
+      .orderBy(asc(schema.roles.slug));
+    return rows.map(roleRow);
+  }
+  const out: Role[] = [];
+  for (const rid of mem.serviceAccountRoles.get(serviceAccountId) || []) {
+    const role = mem.roles.get(rid);
+    if (role) out.push(role);
+  }
+  return out.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+export async function policiesForServiceAccount(serviceAccountId: string): Promise<PolicyDoc[]> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.select({ document: schema.policies.document })
+      .from(schema.policies)
+      .innerJoin(schema.rolePolicies, eq(schema.rolePolicies.policyId, schema.policies.id))
+      .innerJoin(schema.serviceAccountRoles, eq(schema.serviceAccountRoles.roleId, schema.rolePolicies.roleId))
+      .where(eq(schema.serviceAccountRoles.serviceAccountId, serviceAccountId));
+    return rows.map((x) => x.document as PolicyDoc);
+  }
+  const docs: PolicyDoc[] = [];
+  for (const rid of mem.serviceAccountRoles.get(serviceAccountId) || []) {
+    for (const pid of mem.rolePolicies.get(rid) || []) {
+      const p = mem.policies.get(pid);
+      if (p) docs.push(p.document);
+    }
+  }
+  return docs;
 }
 
 export const __mem = mem;

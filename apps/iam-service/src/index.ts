@@ -16,9 +16,12 @@ import {
   listRoles, listPolicies, logAudit, listAudit, purgeAudit,
   getRoleById, getPolicyById, getAccountById, accountsForUser, getOrgById,
   policiesForRole, rolesForUser, ensureTables,
+  setOrgAdmin, orgHasAdmin, assignRoleToServiceAccount, unassignRoleFromServiceAccount, rolesForServiceAccount,
+  type User,
 } from './db';
 import { evaluatePolicies, validatePolicyDocument } from './policy';
-import { signAccess, newRefreshToken, storeRefresh, consumeRefresh, revokeRefresh, revokeAllRefresh, consumeAndRevokeRefresh, findRefreshOwner, refreshExpiry, revokeApiKey, createApiKeyRecord, verifyApiKey, verifyAccess, listApiKeys, findApiKeyById } from './tokens';
+import { signAccess, newRefreshToken, storeRefresh, consumeRefresh, revokeRefresh, revokeAllRefresh, consumeAndRevokeRefresh, findRefreshOwner, refreshExpiry, revokeApiKey, createApiKeyRecord, verifyApiKey, verifyAccess, listApiKeys, findApiKeyById, rotateApiKey, listSessions, revokeSession } from './tokens';
+import { decideForPrincipal, managedPolicyList, MANAGED_POLICIES, type PrincipalInput } from './authz';
 import { secretsEqual } from './db';
 import { ingestUsageEvents, listUsageEvents, purgeUsage, usageSummary, type UsageFilter } from './usage';
 import { signState, exchangeCode, oidcSettings, OidcError } from './oidc';
@@ -160,6 +163,23 @@ async function canActForAccount(req: express.Request, trustStamped: boolean, acc
   if (!org) return false;
   const acc = await getAccountById(accountId);
   return !!acc && acc.org_id === org;
+}
+
+/** Bootstrap rule: the first user of an organization becomes its
+ *  administrator (AWS root-like). Later users start with no permissions and
+ *  are granted roles/managed policies by an admin. */
+async function bootstrapOrgAdmin(user: User): Promise<User> {
+  if (user.is_org_admin) return user;
+  if (await orgHasAdmin(user.org_id)) return user;
+  return (await setOrgAdmin(user.id, true)) || user;
+}
+
+/** Is the caller an administrator of `orgId`? Machine identities never are. */
+async function callerIsOrgAdmin(req: express.Request, trustStamped: boolean, orgId: string): Promise<boolean> {
+  const uid = await resolveCallerUser(req, trustStamped);
+  if (!uid) return false;
+  const u = await getUserById(uid);
+  return !!u && u.org_id === orgId && !!u.is_org_admin;
 }
 
 /** May the caller act for `orgId`? Same stamped-trust rule; service-account
@@ -414,6 +434,18 @@ export function createApp(): express.Express {
     // Gateway telemetry ingest: authenticated by the shared internal secret in
     // the handler itself (it has no end-user Bearer/API key to present).
     if (p === '/v1/usage/ingest') return next();
+    // Gateway-only endpoints (central authorization). There is no gateway
+    // route for /internal/*, so clients cannot reach them through the edge;
+    // the shared secret authenticates the gateway itself.
+    if (p.startsWith('/internal/')) {
+      if (INTERNAL_SECRET) {
+        const got = firstHeader(req.headers['x-synapsedx-internal'] as any);
+        if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
+          return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid internal credential' });
+        }
+      }
+      return next();
+    }
     if (INTERNAL_SECRET) {
       const got = firstHeader(req.headers['x-synapsedx-internal'] as any);
       if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
@@ -533,7 +565,7 @@ export function createApp(): express.Express {
           if ('error' in resolved) {
             return res.status(403).json({ error: resolved.error, message: resolved.message });
           }
-          const user = resolved.user;
+          const user = await bootstrapOrgAdmin(resolved.user);
           const { token, expiresIn } = signAccess({ sub: user.id, email: user.email, org: user.org_id });
           const rt = newRefreshToken();
           await storeRefresh(user.id, rt.hash, refreshExpiry());
@@ -568,7 +600,7 @@ export function createApp(): express.Express {
       if ('error' in resolved) {
         return res.status(403).json({ error: resolved.error, message: resolved.message });
       }
-      const user = resolved.user;
+      const user = await bootstrapOrgAdmin(resolved.user);
       const { token, expiresIn } = signAccess({ sub: user.id, email: user.email, org: user.org_id });
       const rt = newRefreshToken();
       await storeRefresh(user.id, rt.hash, refreshExpiry());
@@ -594,7 +626,7 @@ export function createApp(): express.Express {
     const { email, orgSlug } = parsed.data;
     const slug = orgSlug || 'acme';
     const org = (await getOrgBySlug(slug)) || (await createOrganization(slug, slug));
-    const user = await upsertUser(org.id, email, email);
+    const user = await bootstrapOrgAdmin(await upsertUser(org.id, email, email));
     const { token, expiresIn } = signAccess({ sub: user.id, email: user.email, org: org.id });
     const rt = newRefreshToken();
     await storeRefresh(user.id, rt.hash, refreshExpiry());
@@ -640,6 +672,34 @@ export function createApp(): express.Express {
     if (!rec) return res.status(401).json({ error: 'invalid_refresh' });
     const revoked = await revokeAllRefresh(rec.user_id);
     res.json({ ok: true, revoked });
+  });
+
+  // Sessions: mỗi refresh token còn hiệu lực là 1 phiên đăng nhập. Chủ sở hữu
+  // xem và thu hồi từng phiên (mất thiết bị) — không cần thu hồi tất cả.
+  function sessionOwner(req: express.Request): string | null {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) return null;
+    try {
+      const claims = verifyAccess(h.slice(7));
+      if (claims.kind === 'service-account' || !claims.sub) return null;
+      return claims.sub;
+    } catch {
+      return null;
+    }
+  }
+  app.get('/v1/auth/sessions', async (req, res) => {
+    const uid = sessionOwner(req);
+    if (!uid) return res.status(401).json({ error: 'unauthorized', message: 'user Bearer token required' });
+    noStore(res);
+    res.json(await listSessions(uid));
+  });
+  app.delete('/v1/auth/sessions/:id', async (req, res) => {
+    const uid = sessionOwner(req);
+    if (!uid) return res.status(401).json({ error: 'unauthorized', message: 'user Bearer token required' });
+    if (!isUuid(req.params.id)) return res.status(400).json({ error: 'invalid_id', message: 'session id must be a UUID' });
+    const ok = await revokeSession(uid, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'session_not_found' });
+    res.json({ ok: true });
   });
 
   // Who-am-I: user record của chính Bearer token.
@@ -812,7 +872,16 @@ export function createApp(): express.Express {
 
   app.post('/v1/accounts/:accountId/policies', async (req, res) => {
     if (!isUuid(req.params.accountId)) return res.status(400).json({ error: 'invalid_id', message: 'accountId must be a UUID' });
-    const { slug, description, document } = (req.body || {}) as any;
+    const { slug, description, managed } = (req.body || {}) as any;
+    let { document } = (req.body || {}) as any;
+    // `managed: "ReadOnlyAccess"` instantiates a managed policy in this account.
+    if (managed != null) {
+      if (typeof managed !== 'string' || !Object.prototype.hasOwnProperty.call(MANAGED_POLICIES, managed)) {
+        return res.status(400).json({ error: 'invalid_managed_policy', message: `managed must be one of ${Object.keys(MANAGED_POLICIES).join(', ')}` });
+      }
+      if (document) return res.status(400).json({ error: 'invalid_body', message: 'send either document or managed, not both' });
+      document = MANAGED_POLICIES[managed].document;
+    }
     if (!slug || !document) return res.status(400).json({ error: 'slug+document required' });
     if (typeof slug !== 'string' || !/^[a-z0-9-]{1,64}$/.test(slug)) {
       return res.status(400).json({ error: 'invalid_slug', message: 'slug must match ^[a-z0-9-]{1,64}$' });
@@ -823,7 +892,8 @@ export function createApp(): express.Express {
     if (!(await canActForAccount(req, TRUST_STAMPED, req.params.accountId))) {
       return res.status(403).json({ error: 'forbidden', message: 'account belongs to another tenant' });
     }
-    res.status(201).json(await createPolicy(req.params.accountId, slug, sanitizeName(description || ''), document));
+    const desc = description || (managed ? `${managed} (managed): ${MANAGED_POLICIES[managed].description}` : '');
+    res.status(201).json(await createPolicy(req.params.accountId, slug, sanitizeName(desc), document));
   });
 
   app.get('/v1/accounts/:accountId/policies', async (req, res) => {
@@ -917,6 +987,54 @@ export function createApp(): express.Express {
   // ---------- Authorize (policy evaluation) ----------
   // context: caller cung cấp thêm (vd {hour, sourceIp}); server luôn ép
   // user/org/email từ DB (caller không override được) để Condition đáng tin.
+  // Central enforcement (gateway → IAM). Decides for the verified principal the
+  // gateway authenticated; deny decisions are audited. Gateway-only route.
+  const principalSchema = z.object({
+    principal: z.object({
+      kind: z.enum(['user', 'service-account', 'apikey']),
+      sub: z.string().uuid().nullish(),
+      org: z.string().max(128).nullish(),
+      account: z.string().max(128).nullish(),
+      scopes: z.array(z.string().min(1).max(200)).max(100).nullish(),
+      keyId: z.string().uuid().nullish(),
+    }),
+    action: z.string().min(1).max(512),
+    resource: z.string().min(1).max(2048),
+    context: z.record(z.any()).nullish(),
+  });
+  app.post('/internal/authorize', async (req, res) => {
+    const parsed = principalSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const { principal, action, resource, context } = parsed.data;
+    const p: PrincipalInput = {
+      kind: principal.kind,
+      sub: principal.sub || undefined,
+      org: principal.org || undefined,
+      account: principal.account || undefined,
+      scopes: principal.scopes || undefined,
+      keyId: principal.keyId || undefined,
+    };
+    const d = await decideForPrincipal(p, action, resource, capContext(context));
+    if (!d.allowed) {
+      // Attribute the row to the identity's own tenant so org-scoped
+      // GET /v1/audit shows the denial to that org's admins.
+      const account = d.account || p.account;
+      const org = d.org || p.org || (account && isUuid(account) ? (await getAccountById(account))?.org_id : undefined);
+      await logAudit({
+        actor_type: p.kind, actor_id: d.principal, action, resource, decision: false,
+        context: { reason: d.reason, enforcement: 'gateway', ...(org ? { org } : {}), ...(account ? { account } : {}) },
+      }).catch(() => undefined);
+    }
+    noStore(res);
+    res.json(d);
+  });
+
+  // AWS-style managed policies (read-only catalog; copy one into an account
+  // with POST /v1/accounts/:accountId/policies {slug, managed}).
+  app.get('/v1/managed-policies', (_req, res) => {
+    res.json(managedPolicyList());
+  });
+
   app.post('/v1/authorize', async (req, res) => {
     const { userId, action, resource, context } = (req.body || {}) as any;
     if (!userId || !action || !resource) return res.status(400).json({ error: 'userId+action+resource required' });
@@ -1041,6 +1159,29 @@ export function createApp(): express.Express {
     res.json({ ok: true });
   });
 
+  // Rotate: cấp key mới cùng owner/scopes, key cũ còn sống `graceSeconds`
+  // (mặc định 0 = thu hồi ngay; tối đa 7 ngày) để deploy không gián đoạn.
+  app.post('/v1/keys/:id/rotate', async (req, res) => {
+    if (!isUuid(req.params.id)) return res.status(400).json({ error: 'invalid_id', message: 'key id must be a UUID' });
+    const grace = (req.body || {}).graceSeconds ?? 0;
+    if (!Number.isInteger(grace) || grace < 0 || grace > 604800) {
+      return res.status(400).json({ error: 'invalid_grace', message: 'graceSeconds must be an integer 0..604800' });
+    }
+    const rec = await findApiKeyById(req.params.id);
+    if (!rec) return res.status(404).json({ error: 'key_not_found' });
+    if (!(await canActForAccount(req, TRUST_STAMPED, rec.account_id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'key belongs to another tenant' });
+    }
+    const next = await rotateApiKey(req.params.id, grace);
+    if (!next) return res.status(409).json({ error: 'key_inactive', message: 'revoked or expired keys cannot be rotated' });
+    noStore(res);
+    res.status(201).json({
+      id: next.id, apiKey: next.value, prefix: next.prefix,
+      rotatedFrom: req.params.id, oldKeyExpiresAt: next.oldKeyExpiresAt,
+      warning: 'Save this apiKey now — it is shown only once.',
+    });
+  });
+
   // ---------- Service accounts (machine identity) ----------
   app.post('/v1/accounts/:accountId/service-accounts', async (req, res) => {
     if (!isUuid(req.params.accountId)) return res.status(400).json({ error: 'invalid_id', message: 'accountId must be a UUID' });
@@ -1123,6 +1264,66 @@ export function createApp(): express.Express {
     const { token, expiresIn } = signAccess({ sub: sa.id, account: sa.account_id, scopes, kind: 'service-account' });
     noStore(res);
     res.json({ accessToken: token, expiresIn, serviceAccount: sa });
+  });
+
+  // Service-account roles: quyền của machine identity đến từ role/policy như
+  // user (role phải cùng account với SA). SA chưa có role → chỉ giới hạn bởi scopes.
+  async function saForCaller(req: express.Request, res: express.Response) {
+    if (!isUuid(req.params.id)) { res.status(400).json({ error: 'invalid_id', message: 'service account id must be a UUID' }); return null; }
+    const sa = await getServiceAccount(req.params.id);
+    if (!sa) { res.status(404).json({ error: 'service_account_not_found' }); return null; }
+    if (!(await canActForAccount(req, TRUST_STAMPED, sa.account_id))) {
+      res.status(403).json({ error: 'forbidden', message: 'service account belongs to another tenant' });
+      return null;
+    }
+    return sa;
+  }
+  app.get('/v1/service-accounts/:id/roles', async (req, res) => {
+    const sa = await saForCaller(req, res);
+    if (!sa) return;
+    res.json(await rolesForServiceAccount(sa.id));
+  });
+  app.post('/v1/service-accounts/:id/roles', async (req, res) => {
+    const roleId = (req.body || {}).roleId;
+    if (typeof roleId !== 'string' || !isUuid(roleId)) return res.status(400).json({ error: 'invalid_roleId', message: 'roleId must be a UUID' });
+    const sa = await saForCaller(req, res);
+    if (!sa) return;
+    const role = await getRoleById(roleId);
+    if (!role) return res.status(404).json({ error: 'role_not_found' });
+    if (role.account_id !== sa.account_id) {
+      return res.status(403).json({ error: 'cross_account', message: "role must belong to the service account's account" });
+    }
+    await assignRoleToServiceAccount(sa.id, roleId);
+    res.json({ ok: true });
+  });
+  app.delete('/v1/service-accounts/:id/roles/:roleId', async (req, res) => {
+    if (!isUuid(req.params.roleId)) return res.status(400).json({ error: 'invalid_id', message: 'roleId must be a UUID' });
+    const sa = await saForCaller(req, res);
+    if (!sa) return;
+    const ok = await unassignRoleFromServiceAccount(sa.id, req.params.roleId);
+    if (!ok) return res.status(404).json({ error: 'assignment_not_found' });
+    res.json({ ok: true });
+  });
+
+  // Org administrators: only an existing admin of the same org may grant or
+  // revoke; the last admin cannot demote themself (org would be unmanageable).
+  app.put('/v1/users/:userId/org-admin', async (req, res) => {
+    if (!isUuid(req.params.userId)) return res.status(400).json({ error: 'invalid_id', message: 'userId must be a UUID' });
+    const flag = (req.body || {}).isOrgAdmin;
+    if (typeof flag !== 'boolean') return res.status(400).json({ error: 'invalid_body', message: 'isOrgAdmin (boolean) required' });
+    const user = await getUserById(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    if (!(await canActForOrg(req, TRUST_STAMPED, user.org_id))) {
+      return res.status(403).json({ error: 'forbidden', message: 'user belongs to another tenant' });
+    }
+    if (!(await callerIsOrgAdmin(req, TRUST_STAMPED, user.org_id))) {
+      return res.status(403).json({ error: 'org_admin_required', message: 'only an organization administrator can change administrators' });
+    }
+    if (!flag && user.is_org_admin) {
+      const admins = (await listUsers(user.org_id)).filter((u) => u.is_org_admin);
+      if (admins.length <= 1) return res.status(409).json({ error: 'last_admin', message: 'an organization needs at least one administrator' });
+    }
+    res.json(await setOrgAdmin(user.id, flag));
   });
 
   // Liệt kê policy của user (hữu ích khi debug authorize).
