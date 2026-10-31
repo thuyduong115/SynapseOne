@@ -57,6 +57,12 @@ services:
       HSTS_ENABLED: "true"
     ports: !reset []
 
+  storage:
+    environment:
+      NODE_ENV: production
+      HSTS_ENABLED: "true"
+    ports: !reset []
+
   prometheus:
     ports: !reset []
 
