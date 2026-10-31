@@ -30,6 +30,7 @@ const Workflows = React.lazy(() => import('./pages/Workflows.jsx'));
 const SynapseBase = React.lazy(() => import('./pages/SynapseBase.jsx'));
 const SynapseQueue = React.lazy(() => import('./pages/SynapseQueue.jsx'));
 const SynapseStream = React.lazy(() => import('./pages/SynapseStream.jsx'));
+const SynapseStorage = React.lazy(() => import('./pages/SynapseStorage.jsx'));
 const SynapseFaststore = React.lazy(() => import('./pages/SynapseFaststore.jsx'));
 const SynapseInference = React.lazy(() => import('./pages/SynapseInference.jsx'));
 const LinkedData = React.lazy(() => import('./pages/LinkedData.jsx'));
@@ -146,6 +147,7 @@ export default function App() {
           <Route path="/base" element={<Guard><ConsoleLayout><SynapseBase /></ConsoleLayout></Guard>} />
           <Route path="/queue" element={<Guard><ConsoleLayout><SynapseQueue /></ConsoleLayout></Guard>} />
           <Route path="/stream" element={<Guard><ConsoleLayout><SynapseStream /></ConsoleLayout></Guard>} />
+          <Route path="/storage" element={<Guard><ConsoleLayout><SynapseStorage /></ConsoleLayout></Guard>} />
           <Route path="/faststore" element={<Guard><ConsoleLayout><SynapseFaststore /></ConsoleLayout></Guard>} />
           <Route path="/inference" element={<Guard><ConsoleLayout><SynapseInference /></ConsoleLayout></Guard>} />
           <Route path="/lds" element={<Guard><ConsoleLayout><LinkedData /></ConsoleLayout></Guard>} />

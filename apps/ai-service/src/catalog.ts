@@ -27,6 +27,8 @@ export const CATALOG: CatalogEndpoint[] = [
   { method: 'GET', path: '/v1/auth/oidc/config', auth: 'none', desc: 'OIDC issuer/client (Authentik/Keycloak)' },
   { method: 'GET', path: '/v1/auth/oidc/start?org=acme', auth: 'none', desc: 'Build IdP authorize URL + signed state' },
   { method: 'POST', path: '/v1/auth/oidc/callback', auth: 'none', desc: 'Real code exchange → tokens (or demo email in dev)', body: { code: '<code>', state: '<state>' } },
+  { method: 'GET', path: '/v1/auth/sessions', auth: 'jwt', desc: 'Your active sessions (one per refresh token)' },
+  { method: 'DELETE', path: '/v1/auth/sessions/:id', auth: 'jwt', desc: 'Revoke one of your sessions (lost device)' },
   // Organizations & Accounts
   { method: 'GET', path: '/v1/orgs', auth: 'either', desc: 'List organizations' },
   { method: 'POST', path: '/v1/orgs', auth: 'either', desc: 'Create an org', body: { slug: 'acme-2', displayName: 'ACME 2' } },
@@ -51,6 +53,8 @@ export const CATALOG: CatalogEndpoint[] = [
   { method: 'POST', path: '/v1/authorize', auth: 'either', desc: 'Evaluate Allow/Deny (+Condition)', body: { userId: '<uid>', action: 'workflow:Execute', resource: '*', context: { team: 'etl' } } },
   { method: 'POST', path: '/v1/authorize/dry-run', auth: 'either', desc: 'Simulator without a user', body: { documents: [], action: 'workflow:Execute', resource: '*' } },
       { method: 'GET', path: '/v1/audit', auth: 'either', desc: 'Audit log (?limit, ?actor, ?allowed=true|false)' },
+  { method: 'GET', path: '/v1/managed-policies', auth: 'either', desc: 'AWS-style managed policies (AdministratorAccess, ReadOnlyAccess, …)' },
+  { method: 'PUT', path: '/v1/users/:userId/org-admin', auth: 'either', desc: 'Grant/revoke organization administrator (org admins only)', body: { isOrgAdmin: true } },
   // API Keys & Service Accounts
   { method: 'POST', path: '/v1/accounts/:accountId/keys', auth: 'either', desc: 'Create a key (shown once)', body: { name: 'demo', scopes: ['*'] } },
   { method: 'GET', path: '/v1/accounts/:accountId/keys', auth: 'either', desc: 'List key metadata (id/prefix only, never secrets)' },
@@ -59,6 +63,10 @@ export const CATALOG: CatalogEndpoint[] = [
   { method: 'GET', path: '/v1/accounts/:accountId/service-accounts', auth: 'either', desc: 'Service accounts' },
   { method: 'POST', path: '/v1/accounts/:accountId/service-accounts', auth: 'either', desc: 'Create a service account', body: { slug: 'etl-worker' } },
   { method: 'POST', path: '/v1/service-accounts/:id/token', auth: 'either', desc: 'Mint a kind=service-account JWT', body: {} },
+  { method: 'POST', path: '/v1/keys/:id/rotate', auth: 'either', desc: 'Rotate a key (new secret; old key valid for graceSeconds)', body: { graceSeconds: 300 } },
+  { method: 'GET', path: '/v1/service-accounts/:id/roles', auth: 'either', desc: 'Roles granted to a service account' },
+  { method: 'POST', path: '/v1/service-accounts/:id/roles', auth: 'either', desc: 'Grant a role to a service account', body: { roleId: '<rid>' } },
+  { method: 'DELETE', path: '/v1/service-accounts/:id/roles/:roleId', auth: 'either', desc: 'Remove a role from a service account' },
   // Credentials (account-scoped secrets; PROPOSED contract — backend in progress.
   // Secrets are encrypted at rest and NEVER returned; list/get return metadata
   // {id, name, type, accountId, expiresAt, version}.)
@@ -187,6 +195,20 @@ export const CATALOG: CatalogEndpoint[] = [
   { method: 'DELETE', path: '/v1/stream/topics/:topic/groups/:group', auth: 'either', desc: 'Destroy a consumer group' },
   { method: 'POST', path: '/v1/stream/topics/:topic/groups/:group/read', auth: 'either', desc: 'Read events via consumer group', body: { consumer: 'worker-1', count: 10, autoAck: false } },
   { method: 'POST', path: '/v1/stream/topics/:topic/groups/:group/ack', auth: 'either', desc: 'Acknowledge processed event IDs', body: { ids: ['1730000000000-0'] } },
+  // Synapse Storage — object storage (buckets, objects, signed links)
+  { method: 'GET', path: '/v1/storage/stats', auth: 'either', desc: 'Backend, bucket count and limits for the tenant' },
+  { method: 'GET', path: '/v1/storage/buckets', auth: 'either', desc: 'List buckets of the tenant' },
+  { method: 'POST', path: '/v1/storage/buckets', auth: 'either', desc: 'Create a bucket (private)', body: { name: 'documents', maxObjectBytes: 10485760 } },
+  { method: 'GET', path: '/v1/storage/buckets/:bucket', auth: 'either', desc: 'Bucket configuration' },
+  { method: 'DELETE', path: '/v1/storage/buckets/:bucket', auth: 'either', desc: 'Delete a bucket (?force=true also deletes its objects)' },
+  { method: 'GET', path: '/v1/storage/buckets/:bucket/objects', auth: 'either', desc: 'List objects (?prefix&delimiter=/&cursor&limit)' },
+  { method: 'PUT', path: '/v1/storage/buckets/:bucket/objects/:key', auth: 'either', desc: 'Upload an object (raw body, Content-Type kept)', body: 'hello world' },
+  { method: 'GET', path: '/v1/storage/buckets/:bucket/objects/:key', auth: 'either', desc: 'Download an object (ETag / If-None-Match)' },
+  { method: 'DELETE', path: '/v1/storage/buckets/:bucket/objects/:key', auth: 'either', desc: 'Delete an object' },
+  { method: 'POST', path: '/v1/storage/buckets/:bucket/presign-download', auth: 'either', desc: 'Time-limited download link (no credentials needed)', body: { key: 'reports/q3.pdf', expiresIn: 900 } },
+  { method: 'POST', path: '/v1/storage/buckets/:bucket/presign-upload', auth: 'either', desc: 'Time-limited upload link for one key + content type', body: { key: 'inbox/photo.jpg', contentType: 'image/jpeg', expiresIn: 900 } },
+  { method: 'GET', path: '/v1/storage/signed/:token', auth: 'none', desc: 'Download through a signed link' },
+  { method: 'PUT', path: '/v1/storage/signed/:token', auth: 'none', desc: 'Upload through a signed link (Content-Type must match)' },
   // Usage & Telemetry (gateway request telemetry; org-scoped reads)
   { method: 'GET', path: '/v1/usage/summary', auth: 'either', desc: 'Request/feature aggregates (?from&to&feature&statusClass&method&q&accountId)' },
   { method: 'GET', path: '/v1/usage/events', auth: 'either', desc: 'Request log, newest first (?from&to&limit&offset + same filters)' },

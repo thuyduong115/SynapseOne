@@ -13,6 +13,8 @@
  *   client.base       SynapseBase collections/documents/queries/mapping
  *   client.faststore  Synapse Faststore cache/KV, collections, locks
  *   client.queue      SynapseQueue publish/consume/ack, dead letters
+ *   client.stream     SynapseStream topics, events, consumer groups
+ *   client.storage    Synapse Storage buckets, objects, signed links
  *   client.inference  LLM proxy, embeddings, decision + semantic routing
  *
  * The old flat methods still work but emit a DeprecationWarning pointing at the
@@ -28,6 +30,7 @@ import { BaseService } from './base';
 import { FaststoreService } from './faststore';
 import { QueueService } from './queue';
 import { StreamService } from './stream';
+import { StorageService } from './storage';
 import { InferenceService } from './inference';
 import { AiService } from './ai';
 
@@ -40,6 +43,7 @@ export * from './base';
 export * from './faststore';
 export * from './queue';
 export * from './stream';
+export * from './storage';
 export * from './inference';
 
 /** Legacy flat LDS signatures (the namespaced service drops the `lds` prefix). */
@@ -68,6 +72,7 @@ export class SynapseDXClient {
   readonly faststore: FaststoreService;
   readonly queue: QueueService;
   readonly stream: StreamService;
+  readonly storage: StorageService;
   readonly inference: InferenceService;
 
   constructor(opts: SynapseDXClientOptions) {
@@ -80,6 +85,7 @@ export class SynapseDXClient {
     this.faststore = new FaststoreService(this.http);
     this.queue = new QueueService(this.http);
     this.stream = new StreamService(this.http);
+    this.storage = new StorageService(this.http);
     this.inference = new InferenceService(this.http);
   }
 
@@ -109,6 +115,8 @@ const IAM_METHODS = [
   'createApiKey', 'revokeApiKey', 'listApiKeys', 'verifyApiKey',
   'createServiceAccount', 'listServiceAccounts', 'serviceAccountToken',
   'usageSummary', 'usageEvents',
+  'rotateApiKey', 'listSessions', 'revokeSession', 'setOrgAdmin', 'managedPolicies', 'createManagedPolicy',
+  'serviceAccountRoles', 'assignServiceAccountRole', 'unassignServiceAccountRole',
 ] as const;
 
 const WORKFLOW_METHODS = [

@@ -121,6 +121,35 @@ const del = (path, auth) => req(path, { method: 'DELETE', ...auth });
 // Pages that fetch() directly bypass token rotation — use this instead.
 const call = (method, path, body, auth) => req(path, { method, body, ...auth });
 
+/** Binary-safe request (object storage): same auth + single silent refresh as
+ *  req(), but sends/returns raw bytes instead of JSON. */
+async function rawReq(path, { method = 'GET', body, contentType, token, apiKey, _retried } = {}) {
+  const headers = {};
+  if (contentType) headers['Content-Type'] = contentType;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (apiKey) headers['X-API-Key'] = apiKey;
+  let r;
+  try {
+    r = await fetch(`${baseUrl()}${path}`, { method, headers, body });
+  } catch (e) {
+    throw new Error(`synapsedx network ${path}: ${e.message || e}`);
+  }
+  if (r.status === 401 && !_retried && token) {
+    const rotated = await rotateOnce();
+    const next = rotated?.accessToken || authStore.get()?.token;
+    if (next && next !== token) return rawReq(path, { method, body, contentType, token: next, apiKey, _retried: true });
+  }
+  if (!r.ok) {
+    const text = await r.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch { /* keep text */ }
+    throw new SynapseDXError(r.status, path, data);
+  }
+  return r;
+}
+const storageKey = (k) => String(k).split('/').map(encodeURIComponent).join('/');
+const storageBucket = (b) => `/v1/storage/buckets/${encodeURIComponent(b)}`;
+
 export const api = {
   call,
   login: (email, orgSlug) => post('/v1/auth/login', { email, orgSlug }),
@@ -161,7 +190,22 @@ export const api = {
     post('/v1/authorize/dry-run', { documents, action, resource, context }, a),
   audit: (limit, actor, a, allowed) =>
     get(`/v1/audit?limit=${limit || 50}${actor ? `&actor=${encodeURIComponent(actor)}` : ''}${allowed === undefined ? '' : `&allowed=${allowed ? 'true' : 'false'}`}`, a),
-  createKey: (accountId, name, a) => post(`/v1/accounts/${encodeURIComponent(accountId)}/keys`, { name, scopes: ['*'] }, a),
+  createKey: (accountId, name, a, opts = {}) =>
+    post(`/v1/accounts/${encodeURIComponent(accountId)}/keys`, {
+      name,
+      scopes: opts.scopes && opts.scopes.length ? opts.scopes : ['*'],
+      ...(opts.userId ? { userId: opts.userId } : {}),
+    }, a),
+  rotateKey: (id, graceSeconds, a) => post(`/v1/keys/${encodeURIComponent(id)}/rotate`, { graceSeconds: graceSeconds || 0 }, a),
+  sessions: (a) => get('/v1/auth/sessions', a),
+  revokeSession: (id, a) => del(`/v1/auth/sessions/${encodeURIComponent(id)}`, a),
+  managedPolicies: (a) => get('/v1/managed-policies', a),
+  createManagedPolicy: (accountId, slug, managed, a) =>
+    post(`/v1/accounts/${encodeURIComponent(accountId)}/policies`, { slug, managed }, a),
+  setOrgAdmin: (userId, isOrgAdmin, a) => put(`/v1/users/${encodeURIComponent(userId)}/org-admin`, { isOrgAdmin }, a),
+  saRoles: (id, a) => get(`/v1/service-accounts/${encodeURIComponent(id)}/roles`, a),
+  saGrantRole: (id, roleId, a) => post(`/v1/service-accounts/${encodeURIComponent(id)}/roles`, { roleId }, a),
+  saRevokeRole: (id, roleId, a) => del(`/v1/service-accounts/${encodeURIComponent(id)}/roles/${encodeURIComponent(roleId)}`, a),
   listKeys: (accountId, a) => get(`/v1/accounts/${encodeURIComponent(accountId)}/keys`, a),
   serviceAccounts: (accountId, a) => get(`/v1/accounts/${encodeURIComponent(accountId)}/service-accounts`, a),
   createSA: (accountId, slug, a) => post(`/v1/accounts/${encodeURIComponent(accountId)}/service-accounts`, { slug }, a),
@@ -365,6 +409,35 @@ export const api = {
     const s = qs.toString();
     return get(`/v1/usage/events${s ? `?${s}` : ''}`, a);
   },
+  // ---- Synapse Storage (object storage) ----
+  storageStats: (a) => get('/v1/storage/stats', a),
+  storageBuckets: (a) => get('/v1/storage/buckets', a),
+  storageCreateBucket: (name, maxObjectBytes, a) =>
+    post('/v1/storage/buckets', maxObjectBytes ? { name, maxObjectBytes } : { name }, a),
+  storageDeleteBucket: (name, force, a) => del(`${storageBucket(name)}${force ? '?force=true' : ''}`, a),
+  storageObjects: (bucket, params, a) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params || {})) {
+      if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+    }
+    const s = qs.toString();
+    return get(`${storageBucket(bucket)}/objects${s ? `?${s}` : ''}`, a);
+  },
+  storageUpload: async (bucket, key, file, contentType, a) => {
+    const r = await rawReq(`${storageBucket(bucket)}/objects/${storageKey(key)}`, {
+      method: 'PUT', body: file, contentType: contentType || 'application/octet-stream', ...a,
+    });
+    return r.json();
+  },
+  storageDownload: async (bucket, key, a) => {
+    const r = await rawReq(`${storageBucket(bucket)}/objects/${storageKey(key)}`, { ...a });
+    return { blob: await r.blob(), contentType: r.headers.get('content-type') || 'application/octet-stream' };
+  },
+  storageDeleteObject: (bucket, key, a) => del(`${storageBucket(bucket)}/objects/${storageKey(key)}`, a),
+  storagePresignDownload: (bucket, key, expiresIn, a) =>
+    post(`${storageBucket(bucket)}/presign-download`, { key, ...(expiresIn ? { expiresIn } : {}) }, a),
+  storagePresignUpload: (bucket, key, contentType, expiresIn, a) =>
+    post(`${storageBucket(bucket)}/presign-upload`, { key, ...(contentType ? { contentType } : {}), ...(expiresIn ? { expiresIn } : {}) }, a),
   // ---- Synapse Inference Engine ----
   inferenceHealth: (a) => get('/v1/inference/health', a),
   inferenceChat: (body, a) => post('/v1/inference/chat/completions', body, a),

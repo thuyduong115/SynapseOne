@@ -41,6 +41,16 @@
       "require": "./dist/queue.js",
       "default": "./dist/queue.js"
     },
+    "./stream": {
+      "types": "./dist/stream.d.ts",
+      "require": "./dist/stream.js",
+      "default": "./dist/stream.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "require": "./dist/storage.js",
+      "default": "./dist/storage.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

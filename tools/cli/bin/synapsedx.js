@@ -243,6 +243,25 @@ function parse(argv) {
       if (!v) throw new Error('missing value for --context-url <url>');
       (opts.contextUrls ??= []).push(v);
     }
+    // Token management + storage flags.
+    else if (a === '--grace') opts.grace = argv[++i];
+    else if (a.startsWith('--grace=')) opts.grace = a.slice(8);
+    else if (a === '--scopes') opts.scopes = argv[++i];
+    else if (a.startsWith('--scopes=')) opts.scopes = a.slice(9);
+    else if (a === '--user') opts.user = argv[++i];
+    else if (a.startsWith('--user=')) opts.user = a.slice(7);
+    else if (a === '--managed') opts.managed = argv[++i];
+    else if (a.startsWith('--managed=')) opts.managed = a.slice(10);
+    else if (a === '--prefix') opts.prefix = argv[++i];
+    else if (a.startsWith('--prefix=')) opts.prefix = a.slice(9);
+    else if (a === '--out') opts.out = argv[++i];
+    else if (a.startsWith('--out=')) opts.out = a.slice(6);
+    else if (a === '--expires') opts.expires = argv[++i];
+    else if (a.startsWith('--expires=')) opts.expires = a.slice(10);
+    else if (a === '--max-bytes') opts.maxBytes = argv[++i];
+    else if (a.startsWith('--max-bytes=')) opts.maxBytes = a.slice(12);
+    else if (a === '--force') opts.force = true;
+    else if (a === '--upload') opts.upload = true;
     else args.push(a);
   }
   return { args, opts };
@@ -386,7 +405,9 @@ async function cmdPolicies(o) {
   const [sub, ...rest] = o._;
   if (sub === 'create') {
     const [account, slug] = rest;
-    need(account, 'account'); need(slug, 'slug'); need(o.file, '--file policy.json');
+    need(account, 'account'); need(slug, 'slug');
+    if (o.managed) return out(await POST(`/v1/accounts/${encodeURIComponent(account)}/policies`, { slug, managed: o.managed }, o), o);
+    need(o.file, '--file policy.json (or --managed NAME)');
     return out(await POST(`/v1/accounts/${encodeURIComponent(account)}/policies`, { slug, document: readJson(o.file) }, o), o);
   }
   if (sub === 'delete') {
@@ -433,8 +454,19 @@ async function cmdKeys(o) {
   const [sub, ...rest] = o._;
   if (sub === 'create') {
     need(rest[0], 'account');
-    const r = await POST(`/v1/accounts/${encodeURIComponent(rest[0])}/keys`, { name: o.name || o.label || 'cli', scopes: ['*'] }, o);
+    const scopes = o.scopes ? String(o.scopes).split(',').map((x) => x.trim()).filter(Boolean) : ['*'];
+    const body = { name: o.name || o.label || 'cli', scopes, ...(o.user ? { userId: o.user } : {}) };
+    const r = await POST(`/v1/accounts/${encodeURIComponent(rest[0])}/keys`, body, o);
     if (!o.json) console.log(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}`);
+    else console.log(JSON.stringify(r, null, 2));
+    return;
+  }
+  if (sub === 'rotate') {
+    need(rest[0], 'key-id');
+    const graceSeconds = o.grace === undefined ? 0 : Number(o.grace);
+    if (!Number.isInteger(graceSeconds) || graceSeconds < 0) throw new Error('--grace must be a non-negative integer (seconds)');
+    const r = await POST(`/v1/keys/${encodeURIComponent(rest[0])}/rotate`, { graceSeconds }, o);
+    if (!o.json) console.log(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}\nold key ${r.rotatedFrom} expires at ${r.oldKeyExpiresAt}`);
     else console.log(JSON.stringify(r, null, 2));
     return;
   }
@@ -449,9 +481,9 @@ async function cmdKeys(o) {
   if (sub === 'list') {
     need(rest[0], 'account');
     const r = await GET(`/v1/accounts/${encodeURIComponent(rest[0])}/keys`, o);
-    return out(Array.isArray(r) ? r : [], o, ['id', 'name', 'prefix', 'revoked_at']);
+    return out(Array.isArray(r) ? r : [], o, ['id', 'name', 'prefix', 'scopes', 'user_id', 'last_used_at', 'revoked_at']);
   }
-  throw new Error(`usage: keys create <account> [--name N] | keys list <account> | keys revoke <key-id> | keys verify <api-key>`);
+  throw new Error(`usage: keys create <account> [--name N] [--scopes a,b] [--user USER_ID] | keys list <account> | keys rotate <key-id> [--grace SECONDS] | keys revoke <key-id> | keys verify <api-key>`);
 }
 async function cmdSa(o) {
   const [sub, ...rest] = o._;
@@ -466,8 +498,116 @@ async function cmdSa(o) {
     else console.log(JSON.stringify(r, null, 2));
     return;
   }
+  if (sub === 'roles') {
+    need(rest[0], 'sa-id');
+    return out(await GET(`/v1/service-accounts/${encodeURIComponent(rest[0])}/roles`, o), o, ['slug', 'id']);
+  }
+  if (sub === 'grant') {
+    need(rest[0], 'sa-id'); need(rest[1], 'role-id');
+    return out(await POST(`/v1/service-accounts/${encodeURIComponent(rest[0])}/roles`, { roleId: rest[1] }, o), o);
+  }
+  if (sub === 'revoke-role') {
+    need(rest[0], 'sa-id'); need(rest[1], 'role-id');
+    return out(await DEL(`/v1/service-accounts/${encodeURIComponent(rest[0])}/roles/${encodeURIComponent(rest[1])}`, o), o);
+  }
   need(sub, 'account');
   return out(await GET(`/v1/accounts/${encodeURIComponent(sub)}/service-accounts`, o), o, ['slug', 'id']);
+}
+
+// ---------- token management: sessions, org admins, managed policies ----------
+async function cmdSessions(o) {
+  const [sub, ...rest] = o._;
+  if (sub === 'revoke') {
+    need(rest[0], 'session-id');
+    return out(await DEL(`/v1/auth/sessions/${encodeURIComponent(rest[0])}`, o), o);
+  }
+  if (sub && sub !== 'list') throw new Error('usage: sessions [list] | sessions revoke <session-id>');
+  return out(await GET('/v1/auth/sessions', o), o, ['id', 'created_at', 'expires_at']);
+}
+async function cmdOrgAdmin(o) {
+  const [userId, flag] = o._;
+  need(userId, 'user-id');
+  if (flag !== 'on' && flag !== 'off') throw new Error('usage: org-admin <user-id> on|off');
+  return out(await req('PUT', `/v1/users/${encodeURIComponent(userId)}/org-admin`, { isOrgAdmin: flag === 'on' }, o), o);
+}
+async function cmdManagedPolicies(o) {
+  return out(await GET('/v1/managed-policies', o), o, ['name', 'description']);
+}
+
+// ---------- Synapse Storage ----------
+const enc = (s) => encodeURIComponent(s);
+const encKey = (k) => String(k).split('/').map(encodeURIComponent).join('/');
+async function rawReq(method, p, body, contentType, opts, withAuth = true) {
+  const h = withAuth ? authHeaders(opts) : { Connection: 'close' };
+  delete h['Content-Type'];
+  if (contentType) h['Content-Type'] = contentType;
+  let r;
+  try {
+    r = await fetch(baseUrl(opts) + p, { method, headers: h, body });
+  } catch (e) {
+    throw new Error(`network ${p}: ${e.message || e}`);
+  }
+  if (!r.ok) {
+    const text = await r.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch { /* keep text */ }
+    throw httpError(r.status, p, data);
+  }
+  return r;
+}
+async function cmdStorage(o) {
+  const [sub, ...rest] = o._;
+  const usage = 'storage buckets [list] | storage buckets create <name> [--max-bytes N] | storage buckets delete <name> [--force] | storage ls <bucket> [--prefix P] [--limit N] | storage put <bucket> <key> <file> [--type CT] | storage get <bucket> <key> [--out FILE] | storage rm <bucket> <key> | storage presign <bucket> <key> [--upload --type CT] [--expires SECONDS] | storage fetch <signed-path> [--out FILE]';
+  if (sub === 'buckets') {
+    const [action, name] = rest;
+    if (action === 'create') {
+      need(name, 'name');
+      return out(await POST('/v1/storage/buckets', { name, ...(o.maxBytes ? { maxObjectBytes: Number(o.maxBytes) } : {}) }, o), o);
+    }
+    if (action === 'delete') {
+      need(name, 'name');
+      return out(await DEL(`/v1/storage/buckets/${enc(name)}${o.force ? '?force=true' : ''}`, o), o);
+    }
+    return out(await GET('/v1/storage/buckets', o), o, ['name', 'maxObjectBytes', 'createdAt']);
+  }
+  if (sub === 'ls') {
+    need(rest[0], 'bucket');
+    const qs = new URLSearchParams();
+    if (o.prefix) qs.set('prefix', o.prefix);
+    if (o.limit) qs.set('limit', String(o.limit));
+    const r = await GET(`/v1/storage/buckets/${enc(rest[0])}/objects${qs.toString() ? `?${qs}` : ''}`, o);
+    return out(o.json ? r : (r?.items || []), o, ['key', 'size', 'lastModified']);
+  }
+  if (sub === 'put') {
+    const [bucket, key, file] = rest;
+    need(bucket, 'bucket'); need(key, 'key'); need(file, 'file');
+    const r = await rawReq('PUT', `/v1/storage/buckets/${enc(bucket)}/objects/${encKey(key)}`, fs.readFileSync(file), o.credType || 'application/octet-stream', o);
+    return out(await r.json(), o);
+  }
+  if (sub === 'get' || sub === 'fetch') {
+    const p = sub === 'get' ? (need(rest[0], 'bucket'), need(rest[1], 'key'), `/v1/storage/buckets/${enc(rest[0])}/objects/${encKey(rest[1])}`) : (need(rest[0], 'signed-path'), rest[0]);
+    const r = await rawReq('GET', p, undefined, undefined, o, sub === 'get');
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (o.out) {
+      fs.writeFileSync(o.out, buf);
+      return console.log(`wrote ${buf.length} bytes to ${o.out}`);
+    }
+    return process.stdout.write(buf);
+  }
+  if (sub === 'rm') {
+    need(rest[0], 'bucket'); need(rest[1], 'key');
+    return out(await DEL(`/v1/storage/buckets/${enc(rest[0])}/objects/${encKey(rest[1])}`, o), o);
+  }
+  if (sub === 'presign') {
+    const [bucket, key] = rest;
+    need(bucket, 'bucket'); need(key, 'key');
+    const body = { key, ...(o.expires ? { expiresIn: Number(o.expires) } : {}), ...(o.upload && o.credType ? { contentType: o.credType } : {}) };
+    const r = await POST(`/v1/storage/buckets/${enc(bucket)}/presign-${o.upload ? 'upload' : 'download'}`, body, o);
+    if (o.json) return console.log(JSON.stringify(r, null, 2));
+    const url = /^https?:/.test(r.url) ? r.url : baseUrl(o) + r.path;
+    return console.log(`${r.method} ${url}\nexpires: ${r.expiresAt}${r.contentType ? `\ncontent-type: ${r.contentType}` : ''}`);
+  }
+  throw new Error(`usage: ${usage}`);
 }
 async function cmdWorkflows(o) {
   const [sub, ...rest] = o._;
@@ -911,7 +1051,10 @@ const COMMANDS = {
   accounts: { fn: cmdAccounts, use: 'accounts [org] [list] | accounts create [org] <slug> [name]', doc: 'Accounts' },
   users: { fn: cmdUsers, use: 'users [org] | users create <org> <email> [name] | users policies <user-id>', doc: 'Users + effective policies' },
   roles: { fn: cmdRoles, use: 'roles <account> [list] | roles create <account> <slug> | roles delete <id>', doc: 'Roles' },
-  policies: { fn: cmdPolicies, use: 'policies <account> [list] | policies create <account> <slug> --file p.json | policies delete <id>', doc: 'Policies' },
+  policies: { fn: cmdPolicies, use: 'policies <account> [list] | policies create <account> <slug> (--file p.json | --managed ReadOnlyAccess) | policies delete <id>', doc: 'Policies' },
+  'managed-policies': { fn: cmdManagedPolicies, use: 'managed-policies', doc: 'AWS-style managed policies (AdministratorAccess, ReadOnlyAccess, ...)' },
+  'org-admin': { fn: cmdOrgAdmin, use: 'org-admin <user-id> on|off', doc: 'Grant/revoke organization administrator' },
+  sessions: { fn: cmdSessions, use: 'sessions [list] | sessions revoke <session-id>', doc: 'Your login sessions (refresh tokens)' },
   attach: { fn: cmdAttach, use: 'attach <role-id> <policy-id>', doc: 'Attach policy to role' },
   detach: { fn: cmdDetach, use: 'detach <role-id> <policy-id>', doc: 'Detach policy from role' },
   assign: { fn: cmdAssign, use: 'assign <user-id> <role-id>', doc: 'Assign role to user' },
@@ -919,8 +1062,9 @@ const COMMANDS = {
   authz: { fn: cmdAuthz, use: 'authz <user> <action> <resource> [--context k=v]', doc: 'Authorize check' },
   sim: { fn: cmdSim, use: 'sim --file policy.json <action> <resource> [--context k=v]', doc: 'Policy simulator' },
   audit: { fn: cmdAudit, use: 'audit [--limit N] [--actor ID]', doc: 'Audit log' },
-  keys: { fn: cmdKeys, use: 'keys create <account> [--name N] | keys list <account> | keys revoke <key-id> | keys verify <api-key>', doc: 'API keys' },
-  sa: { fn: cmdSa, use: 'sa <account> [list] | sa create <account> <slug> | sa token <sa-id>', doc: 'Service accounts' },
+  keys: { fn: cmdKeys, use: 'keys create <account> [--name N] [--scopes a,b] [--user USER_ID] | keys list <account> | keys rotate <key-id> [--grace SECONDS] | keys revoke <key-id> | keys verify <api-key>', doc: 'API keys (scoped, owner-bound, rotatable)' },
+  sa: { fn: cmdSa, use: 'sa <account> [list] | sa create <account> <slug> | sa token <sa-id> | sa roles <sa-id> | sa grant <sa-id> <role-id> | sa revoke-role <sa-id> <role-id>', doc: 'Service accounts + their roles' },
+  storage: { fn: cmdStorage, use: 'storage buckets [list|create <name>|delete <name> [--force]] | storage ls <bucket> [--prefix P] | storage put <bucket> <key> <file> [--type CT] | storage get <bucket> <key> [--out FILE] | storage rm <bucket> <key> | storage presign <bucket> <key> [--upload --type CT] [--expires S] | storage fetch <signed-path> [--out FILE]', doc: 'Synapse Storage: buckets, objects, signed links' },
   credentials: { fn: cmdCredentials, use: 'credentials create <account> --name N --type bearer|basic|apiKey|oauth2 (--secret S | --secret-file F) [--expires-at ISO] | credentials [list] <account> | credentials get|delete <id> | credentials rotate <id> (--secret S | --secret-file F)', doc: 'Account credentials, secrets write-only (PROPOSED: backend in progress)' },
   call: { fn: cmdCall, use: 'call <METHOD> <path> [--data \'{...}\'|body.json] [--file body.json]', doc: 'Generic gateway call (escape hatch for new endpoints)' },
   workflows: { fn: cmdWorkflows, use: 'workflows [list] | workflows create --template T [--name N] | workflows create --file def.json [--name N] | workflows get|activate|deactivate <id> | workflows exec|execute <id> [--data \'{...}\'|input.json] [--file payload.json] | workflows update [--name N] [--file def.json] <id> | workflows delete <id> | workflows test-run --file def.json [--input input.json|\'{...}\'] [--workflow-id ID]', doc: 'Workflows (local engine)' },

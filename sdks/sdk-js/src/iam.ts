@@ -108,6 +108,35 @@ export class IamService {
   verifyApiKey(apiKey: string) {
     return this.http.req(`/v1/keys/verify`, { method: 'POST', body: JSON.stringify({ apiKey }) });
   }
+  /** Rotate a key: returns the new secret once; the old key stays valid for `graceSeconds` (0 = revoke now). */
+  rotateApiKey(keyId: string, graceSeconds = 0) {
+    return this.http.req<{ id: string; apiKey: string; prefix: string; rotatedFrom: string; oldKeyExpiresAt: string }>(
+      `/v1/keys/${encodeURIComponent(keyId)}/rotate`,
+      { method: 'POST', body: JSON.stringify({ graceSeconds }) },
+    );
+  }
+
+  // ---- sessions (refresh tokens of the signed-in user) ----
+  listSessions() {
+    return this.http.req<Array<{ id: string; created_at: string | null; expires_at: string | null }>>('/v1/auth/sessions');
+  }
+  revokeSession(sessionId: string) {
+    return this.http.req(`/v1/auth/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  }
+
+  // ---- org administrators & managed policies ----
+  setOrgAdmin(userId: string, isOrgAdmin: boolean) {
+    return this.http.req(`/v1/users/${encodeURIComponent(userId)}/org-admin`, { method: 'PUT', body: JSON.stringify({ isOrgAdmin }) });
+  }
+  managedPolicies() {
+    return this.http.req<Array<{ name: string; description: string; document: any }>>('/v1/managed-policies');
+  }
+  /** Instantiate an AWS-style managed policy (e.g. `ReadOnlyAccess`) in an account. */
+  createManagedPolicy(accountId: string, slug: string, managed: string, description?: string) {
+    return this.http.req(`/v1/accounts/${encodeURIComponent(accountId)}/policies`, {
+      method: 'POST', body: JSON.stringify({ slug, managed, ...(description ? { description } : {}) }),
+    });
+  }
 
   // ---- service accounts ----
   createServiceAccount(accountId: string, slug: string, description = '') {
@@ -121,6 +150,16 @@ export class IamService {
       method: 'POST',
       body: JSON.stringify(scopes === undefined ? {} : { scopes }),
     });
+  }
+
+  serviceAccountRoles(saId: string) {
+    return this.http.req(`/v1/service-accounts/${encodeURIComponent(saId)}/roles`);
+  }
+  assignServiceAccountRole(saId: string, roleId: string) {
+    return this.http.req(`/v1/service-accounts/${encodeURIComponent(saId)}/roles`, { method: 'POST', body: JSON.stringify({ roleId }) });
+  }
+  unassignServiceAccountRole(saId: string, roleId: string) {
+    return this.http.req(`/v1/service-accounts/${encodeURIComponent(saId)}/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE' });
   }
 
   // ---- usage & telemetry ----

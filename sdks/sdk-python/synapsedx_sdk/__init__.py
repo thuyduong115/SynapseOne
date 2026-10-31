@@ -17,6 +17,8 @@ talk to:
 ``client.faststore``    Synapse Faststore cache/KV, hashes, lists, sets,
                         sorted sets, locks
 ``client.queue``        SynapseQueue publish/consume/ack, dead letters
+``client.stream``       SynapseStream topics, events, consumer groups
+``client.storage``      Synapse Storage buckets, objects, signed links
 ======================  =============================================
 
 The old flat methods on :class:`SynapseDXClient` still work but are deprecated:
@@ -54,6 +56,7 @@ from .iam import IamService
 from .inference import InferenceService
 from .lds import LdsService
 from .queue import QueueService
+from .storage import StorageService, encode_key
 from .stream import StreamService
 from .workflow import WorkflowService, trigger_webhook, unwrap_executions
 
@@ -69,11 +72,13 @@ __all__ = [
     "QueryResult",
     "VectorSearchResult",
     "QueueService",
+    "StorageService",
     "StreamService",
     "SynapseDXClient",
     "SynapseDXError",
     "WorkflowService",
     "data_to_object",
+    "encode_key",
     "normalize_mapping",
     "object_to_data",
     "trigger_webhook",
@@ -82,7 +87,7 @@ __all__ = [
 
 
 class SynapseDXClient:
-    """One client, one HTTP layer, seven service namespaces.
+    """One client, one HTTP layer, one namespace per platform service.
 
     ``base_url`` points at the gateway (``http://localhost:8080``) or a single
     service origin. ``tenant`` is sent as ``x-synapsedx-tenant`` and is only
@@ -108,6 +113,7 @@ class SynapseDXClient:
         self.faststore = FaststoreService(self._http)
         self.queue = QueueService(self._http)
         self.stream = StreamService(self._http)
+        self.storage = StorageService(self._http)
         self.inference = InferenceService(self._http)
 
     # ---- transport knobs (also mirrored by JS setToken/setApiKey and Go) ----

@@ -741,3 +741,97 @@ describe('error mapping', () => {
     }
   });
 });
+
+describe('Synapse Storage + token management', () => {
+  it('buckets, binary objects, signed links and IAM token APIs', async () => {
+    const hits: Array<{ method: string; path: string; type: string; auth: string; body: Buffer }> = [];
+    const stored = Buffer.from([0, 255, 1, 254, 10]);
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(Buffer.from(c)));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks);
+        hits.push({
+          method: req.method || 'GET',
+          path: req.url || '/',
+          type: String(req.headers['content-type'] || ''),
+          auth: String(req.headers.authorization || ''),
+          body,
+        });
+        if (req.method === 'GET' && (req.url === '/v1/storage/buckets/docs/objects/a%20b/c.bin' || req.url?.startsWith('/v1/storage/signed/'))) {
+          res.setHeader('Content-Type', 'application/octet-stream');
+          res.setHeader('ETag', '"e1"');
+          return res.end(stored);
+        }
+        res.setHeader('Content-Type', 'application/json');
+        if (req.url?.endsWith('/presign-download') || req.url?.endsWith('/presign-upload')) {
+          return res.end(JSON.stringify({ method: req.url.endsWith('upload') ? 'PUT' : 'GET', path: '/v1/storage/signed/tok', url: '/v1/storage/signed/tok', bucket: 'docs', key: 'k', expiresAt: 'x', contentType: 'image/png' }));
+        }
+        res.end(JSON.stringify({ ok: true, size: body.length }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const a = server.address();
+    const c = new SynapseDXClient({ baseUrl: `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}`, token: 'T' });
+    const last = () => hits[hits.length - 1];
+    try {
+      await c.storage.createBucket('docs', { maxObjectBytes: 1024 });
+      assert.equal(last().path, '/v1/storage/buckets');
+      assert.deepEqual(JSON.parse(last().body.toString()), { name: 'docs', maxObjectBytes: 1024 });
+
+      await c.storage.putObject('docs', 'a b/c.bin', stored, 'application/octet-stream');
+      assert.equal(last().method, 'PUT');
+      assert.equal(last().path, '/v1/storage/buckets/docs/objects/a%20b/c.bin', 'key keeps "/" but encodes segments');
+      assert.equal(last().type, 'application/octet-stream');
+      assert.deepEqual(last().body, stored, 'binary body is sent as-is');
+
+      const got = await c.storage.getObject('docs', 'a b/c.bin');
+      assert.deepEqual(Buffer.from(got.data), stored);
+      assert.equal(got.etag, 'e1');
+      assert.equal(last().auth, 'Bearer T');
+
+      await c.storage.listObjects('docs', { prefix: 'a b/', delimiter: '/', limit: 10 });
+      assert.equal(last().path, '/v1/storage/buckets/docs/objects?prefix=a+b%2F&delimiter=%2F&limit=10');
+
+      await c.storage.deleteBucket('docs', { force: true });
+      assert.equal(last().path, '/v1/storage/buckets/docs?force=true');
+      assert.equal(last().method, 'DELETE');
+
+      const dl = await c.storage.presignDownload('docs', 'k', 60);
+      assert.deepEqual(JSON.parse(last().body.toString()), { key: 'k', expiresIn: 60 });
+      const viaLink = await c.storage.downloadSigned(dl);
+      assert.deepEqual(Buffer.from(viaLink.data), stored);
+      assert.equal(last().auth, '', 'signed links never carry credentials');
+
+      const up = await c.storage.presignUpload('docs', 'k', { contentType: 'image/png' });
+      await c.storage.uploadSigned(up, new Uint8Array([1, 2, 3]));
+      assert.equal(last().method, 'PUT');
+      assert.equal(last().type, 'image/png');
+      assert.equal(last().auth, '');
+
+      await c.iam.rotateApiKey('k1', 300);
+      assert.equal(last().path, '/v1/keys/k1/rotate');
+      assert.deepEqual(JSON.parse(last().body.toString()), { graceSeconds: 300 });
+      await c.iam.listSessions();
+      assert.equal(last().path, '/v1/auth/sessions');
+      await c.iam.revokeSession('s1');
+      assert.equal(last().method, 'DELETE');
+      assert.equal(last().path, '/v1/auth/sessions/s1');
+      await c.iam.setOrgAdmin('u1', true);
+      assert.equal(last().method, 'PUT');
+      assert.deepEqual(JSON.parse(last().body.toString()), { isOrgAdmin: true });
+      await c.iam.managedPolicies();
+      assert.equal(last().path, '/v1/managed-policies');
+      await c.iam.createManagedPolicy('acc1', 'readers', 'ReadOnlyAccess');
+      assert.deepEqual(JSON.parse(last().body.toString()), { slug: 'readers', managed: 'ReadOnlyAccess' });
+      await c.iam.assignServiceAccountRole('sa1', 'r1');
+      assert.equal(last().path, '/v1/service-accounts/sa1/roles');
+      await c.iam.unassignServiceAccountRole('sa1', 'r1');
+      assert.equal(last().path, '/v1/service-accounts/sa1/roles/r1');
+      await c.iam.serviceAccountRoles('sa1');
+      assert.equal(last().method, 'GET');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

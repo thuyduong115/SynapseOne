@@ -16,6 +16,7 @@ import {
   faCode,
   faBrain,
   faStream,
+  faHardDrive,
 } from '@fortawesome/free-solid-svg-icons';
 
 export const PLATFORM_SERVICES = [
@@ -66,6 +67,18 @@ export const PLATFORM_SERVICES = [
     shadowColor: 'rgba(244, 63, 94, 0.28)',
     match: (p) => p.startsWith('/stream'),
     keywords: ['stream', 'streaming', 'kafka', 'events', 'consumer group', 'replay', 'telemetry', 'topic', 'log'],
+  },
+  {
+    to: '/storage',
+    label: 'Synapse Storage',
+    category: 'Object Storage',
+    desc: 'Files, images & documents in tenant buckets with signed links',
+    icon: faHardDrive,
+    iconColor: 'from-sky-400 to-cyan-600',
+    bgGradient: 'linear-gradient(135deg, #38bdf8 0%, #0891b2 100%)',
+    shadowColor: 'rgba(8, 145, 178, 0.28)',
+    match: (p) => p.startsWith('/storage'),
+    keywords: ['storage', 'object', 's3', 'bucket', 'file', 'upload', 'download', 'blob', 'document', 'image', 'presigned'],
   },
   {
     to: '/faststore',
