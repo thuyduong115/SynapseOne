@@ -992,7 +992,8 @@ export function createApp(): express.Express {
   const principalSchema = z.object({
     principal: z.object({
       kind: z.enum(['user', 'service-account', 'apikey']),
-      sub: z.string().uuid().nullish(),
+      // Any verified JWT subject; non-UUID subjects resolve to unknown-principal (deny), never 400.
+      sub: z.string().min(1).max(128).nullish(),
       org: z.string().max(128).nullish(),
       account: z.string().max(128).nullish(),
       scopes: z.array(z.string().min(1).max(200)).max(100).nullish(),

@@ -20,6 +20,8 @@ import { getUserById, policiesForServiceAccount, policiesForUser, getServiceAcco
 import { evaluatePolicies, matchPattern, type ConditionContext } from './policy';
 import { findApiKeyById } from './tokens';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type PrincipalKind = 'user' | 'service-account' | 'apikey';
 
 export interface PrincipalInput {
@@ -142,7 +144,7 @@ export async function decideForPrincipal(
   ctx: ConditionContext = {},
 ): Promise<Decision> {
   if (principal.kind === 'apikey') {
-    if (!principal.keyId) return { allowed: false, reason: 'unknown-principal', principal: '' };
+    if (!principal.keyId || !UUID_RE.test(principal.keyId)) return { allowed: false, reason: 'unknown-principal', principal: principal.keyId || '' };
     const key = await findApiKeyById(principal.keyId);
     const live = key && !key.revoked_at && !(key.expires_at && new Date(key.expires_at).getTime() < Date.now());
     if (!key || !live) return { allowed: false, reason: 'unknown-principal', principal: principal.keyId };
@@ -156,6 +158,9 @@ export async function decideForPrincipal(
     return { allowed: true, reason: 'scope-only', ...who };
   }
   if (!principal.sub) return { allowed: false, reason: 'unknown-principal', principal: '' };
+  // Identities are UUIDs; anything else (e.g. a hand-minted test JWT) cannot
+  // own policies — deny cleanly instead of hitting the store with a bad id.
+  if (!UUID_RE.test(principal.sub)) return { allowed: false, reason: 'unknown-principal', principal: principal.sub };
   if (principal.kind === 'service-account') {
     return decideForServiceAccount(principal.sub, principal.scopes, action, resource, ctx);
   }

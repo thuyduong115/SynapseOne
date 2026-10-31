@@ -114,6 +114,13 @@ describe('iam principal authorization', () => {
     assert.equal(r.status, 401);
   });
 
+  it('non-UUID subjects are denied as unknown principals (not 400)', async () => {
+    const r = await decide({ kind: 'user', sub: 'e2e-tester-id' }, 'base:Read');
+    assert.equal(r.status, 200);
+    assert.equal(r.json.allowed, false);
+    assert.equal(r.json.reason, 'unknown-principal');
+  });
+
   it('org admin is allowed; member without roles is implicitly denied', async () => {
     const a = await decide({ kind: 'user', sub: adminId }, 'iam:Write');
     assert.equal(a.json.allowed, true);
