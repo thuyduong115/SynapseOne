@@ -10,6 +10,9 @@ services:
       NODE_ENV: production
       HSTS_ENABLED: "true"
       GATEWAY_VERIFY_APIKEY: "true"
+    networks:
+      synapseone-net:
+        aliases: [synapseone-gateway]
 
   iam:
     environment:
@@ -63,6 +66,9 @@ services:
   console:
     environment:
       NODE_ENV: production
+    networks:
+      synapseone-net:
+        aliases: [synapseone-console]
 
   # TLS terminator + Certbot webroot (renew khong downtime).
   nginx:
@@ -81,7 +87,12 @@ services:
     depends_on:
       - gateway
       - console
-    networks: [synapseone-net]
+    networks:
+      synapseone-net:
+      synapsedx-public-stack:
+        aliases: [synapseone-edge]
+      synapsecity-public-stack:
+        aliases: [synapseone-edge]
 
   certbot:
     image: certbot/certbot:latest
@@ -98,3 +109,9 @@ services:
 volumes:
   certbot-www:
   letsencrypt:
+
+networks:
+  synapsedx-public-stack:
+    external: true
+  synapsecity-public-stack:
+    external: true
