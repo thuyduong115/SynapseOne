@@ -15,6 +15,12 @@ limitations under the License.
 
 This product includes software developed by the SynapseOne Contributors.
 
+Team: VKU.VIC
+Members:
+- Ho Sy Bao Nhan
+- Tran Thi Thuy Duong
+- Vo Thanh Nam
+
 Third-party components (each under its own license — see also THIRD-PARTY.md):
 - Authentik (https://goauthentik.io) — MIT-licensed identity provider, used as optional external IdP via OIDC.
 - Keycloak (https://www.keycloak.org) — Apache-2.0 identity provider, supported as alternative external IdP via OIDC.
