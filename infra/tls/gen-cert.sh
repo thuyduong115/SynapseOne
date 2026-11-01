@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Tao self-signed cert cho dev (synapseone.local). Production: thay bang cert LE/haproxy.
 # Chay tu repo root: bash infra/tls/gen-cert.sh
 set -euo pipefail

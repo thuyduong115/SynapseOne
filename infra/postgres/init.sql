@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- SPDX-FileCopyrightText: 2026 VKU.VIC
 -- SynapseOne database bootstrap.
 --
 -- Table and index DDL is owned by each service's versioned Drizzle migrations

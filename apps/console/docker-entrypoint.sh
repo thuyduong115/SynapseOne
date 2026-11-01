@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Inject runtime URLs into config.js (build once, deploy anywhere).
 # - SYNAPSEONE_PUBLIC_BASE_URL: gateway API ma TRINH DUYET goi toi (https://api.* o prod).
 # - CONSOLE_APP_URL: canonical app host (https://cloud.* o prod). Web chinh (@)

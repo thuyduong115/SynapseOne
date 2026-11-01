@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # synapseone full API check — bao phu toan bo IAM + workflow templates qua gateway.
 # Yeu cau: gateway dang chay; SYNAPSEONE_BASE_URL (mac dinh http://localhost:8080).
 # Tra ve exit 0 neu tat ca pass.

@@ -1,4 +1,6 @@
 ---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 name: Bug report
 about: Báo lỗi synapseone (gateway, IAM, workflow, SDK, compose)
 title: "fix: "

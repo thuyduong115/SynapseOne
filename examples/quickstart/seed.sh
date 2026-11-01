@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Seed du lieu mau cho synapseone: org demo + accounts + roles/policies/users + api key.
 # Idempotent (chay lai an toan). Yeu cau: gateway dang chay, jq co san.
 set -uo pipefail

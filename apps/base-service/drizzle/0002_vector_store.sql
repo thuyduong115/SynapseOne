@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- SPDX-FileCopyrightText: 2026 VKU.VIC
 DO $$ BEGIN
   CREATE EXTENSION IF NOT EXISTS "vector";
 EXCEPTION WHEN OTHERS THEN NULL; END $$;

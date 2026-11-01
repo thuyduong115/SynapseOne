@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # TLS terminator (dev): 1 nginx SNI tren 443 —
 #   https://gateway.synapseone.local -> gateway:8080 (API)
 #   https://synapseone.local         -> console:80   (UI)

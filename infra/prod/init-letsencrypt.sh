@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Xin cert Let's Encrypt lan dau cho synapseone.space (+cloud, +api) bang webroot.
 # Chay tu repo root. Yeu cau: DNS 3 host -> IP server nay; port 80 public.
 #   bash infra/prod/init-letsencrypt.sh

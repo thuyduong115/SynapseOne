@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 VKU.VIC
 /*
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -742,71 +744,75 @@ export default function SynapseStream() {
       </div>
 
       {/* Modal Create Topic */}
-      <Modal
-        open={createTopicModalOpen}
-        onClose={() => setCreateTopicModalOpen(false)}
-        title="Create Stream Topic"
-      >
-        <form onSubmit={handleCreateTopic} className="space-y-4">
-          <Field label="Topic Name" desc="Unique stream topic identifier">
-            <Input
-              value={newTopicName}
-              onChange={(e) => setNewTopicName(e.target.value)}
-              placeholder="e.g. sensor-telemetry"
-              required
-            />
-          </Field>
-          <Field label="Max Length Retention" desc="Maximum number of events to retain (trims oldest)">
-            <Input
-              type="number"
-              value={newMaxLen}
-              onChange={(e) => setNewMaxLen(e.target.value)}
-              placeholder="10000"
-            />
-          </Field>
-          <div className="flex justify-end gap-2 pt-2">
-            <Btn variant="outline" type="button" onClick={() => setCreateTopicModalOpen(false)}>
-              Cancel
-            </Btn>
-            <Btn variant="primary" type="submit" disabled={createSubmitting}>
-              {createSubmitting ? 'Creating...' : 'Create Topic'}
-            </Btn>
-          </div>
-        </form>
-      </Modal>
+      {createTopicModalOpen && (
+        <Modal
+          open={createTopicModalOpen}
+          onClose={() => setCreateTopicModalOpen(false)}
+          title="Create Stream Topic"
+        >
+          <form onSubmit={handleCreateTopic} className="space-y-4">
+            <Field label="Topic Name" desc="Unique stream topic identifier">
+              <Input
+                value={newTopicName}
+                onChange={(e) => setNewTopicName(e.target.value)}
+                placeholder="e.g. sensor-telemetry"
+                required
+              />
+            </Field>
+            <Field label="Max Length Retention" desc="Maximum number of events to retain (trims oldest)">
+              <Input
+                type="number"
+                value={newMaxLen}
+                onChange={(e) => setNewMaxLen(e.target.value)}
+                placeholder="10000"
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Btn variant="outline" type="button" onClick={() => setCreateTopicModalOpen(false)}>
+                Cancel
+              </Btn>
+              <Btn variant="primary" type="submit" disabled={createSubmitting}>
+                {createSubmitting ? 'Creating...' : 'Create Topic'}
+              </Btn>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Modal Create Consumer Group */}
-      <Modal
-        open={createGroupModalOpen}
-        onClose={() => setCreateGroupModalOpen(false)}
-        title="Create Consumer Group"
-      >
-        <form onSubmit={handleCreateGroup} className="space-y-4">
-          <Field label="Group Name" desc="Consumer group identifier">
-            <Input
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              placeholder="e.g. db-ingestors"
-              required
-            />
-          </Field>
-          <Field label="Start Offset ID" desc="'$' for new messages only, or '0-0' to replay from beginning">
-            <Input
-              value={newGroupStartId}
-              onChange={(e) => setNewGroupStartId(e.target.value)}
-              placeholder="$"
-            />
-          </Field>
-          <div className="flex justify-end gap-2 pt-2">
-            <Btn variant="outline" type="button" onClick={() => setCreateGroupModalOpen(false)}>
-              Cancel
-            </Btn>
-            <Btn variant="primary" type="submit" disabled={createGroupSubmitting}>
-              {createGroupSubmitting ? 'Creating...' : 'Create Group'}
-            </Btn>
-          </div>
-        </form>
-      </Modal>
+      {createGroupModalOpen && (
+        <Modal
+          open={createGroupModalOpen}
+          onClose={() => setCreateGroupModalOpen(false)}
+          title="Create Consumer Group"
+        >
+          <form onSubmit={handleCreateGroup} className="space-y-4">
+            <Field label="Group Name" desc="Consumer group identifier">
+              <Input
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                placeholder="e.g. db-ingestors"
+                required
+              />
+            </Field>
+            <Field label="Start Offset ID" desc="'$' for new messages only, or '0-0' to replay from beginning">
+              <Input
+                value={newGroupStartId}
+                onChange={(e) => setNewGroupStartId(e.target.value)}
+                placeholder="$"
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-2">
+              <Btn variant="outline" type="button" onClick={() => setCreateGroupModalOpen(false)}>
+                Cancel
+              </Btn>
+              <Btn variant="primary" type="submit" disabled={createGroupSubmitting}>
+                {createGroupSubmitting ? 'Creating...' : 'Create Group'}
+              </Btn>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }

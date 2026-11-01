@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # SynapseOne CLI one-line installer (POSIX sh, no dependencies besides Node 18+).
 #   curl -fsSL https://synapseone.space/install.sh | sh
 #   # or pin a version: CLI_VERSION=0.7.0 curl -fsSL https://synapseone.space/install.sh | sh

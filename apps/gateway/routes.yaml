@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # SynapseOne Gateway routing table.
 # path prefix -> upstream. Auth mode: none|jwt|apikey|either
 routes:

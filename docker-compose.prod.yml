@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Prod overlay cho synapseone.space (dung kem compose chinh):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 # Edge cong khai duy nhat: nginx :80/:443 (synapseone.space, cloud.*, api.* + LE).

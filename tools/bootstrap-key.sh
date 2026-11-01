@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Tao API key dau tien (prod da tat IAM_ALLOW_DEV_LOGIN): dung de dang nhap console
 # bang tab "API Key". Chay tren server tu repo root:
 #   bash tools/bootstrap-key.sh [email] [orgSlug]

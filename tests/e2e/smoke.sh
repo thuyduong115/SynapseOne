@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # synapseone e2e smoke — run after `docker compose up` or local dev.
 # No fail-hard when authentik is unconfigured: only asserts core IAM+gateway.
 set -u

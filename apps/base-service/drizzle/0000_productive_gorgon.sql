@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- SPDX-FileCopyrightText: 2026 VKU.VIC
 CREATE TABLE IF NOT EXISTS "synapseone_base_collections" (
 	"id" text PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,

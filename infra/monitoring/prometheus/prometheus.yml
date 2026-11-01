@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # SynapseOne Prometheus — scrape gateway (/metrics) + infra exporters.
 # Reload: docker compose up -d prometheus (config mounted read-only).
 global:

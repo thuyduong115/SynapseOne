@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # SynapseOne alert rules (load via rule_files in prometheus.yml).
 # Wire Alertmanager later; until then alerts show on the Prometheus /alerts page.
 groups:

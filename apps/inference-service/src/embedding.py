@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 import hashlib
 import math
 from typing import Any, Dict, List, Optional, Union

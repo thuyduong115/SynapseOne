@@ -1,11 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Copyright 2026 SynapseOne Contributors
 # Licensed under the Apache License, Version 2.0 (the "License");
 """Smoke example for synapseone-sdk (gateway on :8080).
 
 Shows the namespaced services: iam / workflow / lds / base / faststore / queue.
 """
-
-import os
 
 from synapseone_sdk import SynapseOneClient
 

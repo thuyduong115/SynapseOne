@@ -1,3 +1,5 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- SPDX-FileCopyrightText: 2026 VKU.VIC
 -- Rebrand migration: SynapseDX -> SynapseOne table/constraint/index renames.
 -- Fresh installs already create the new names (0000 was rebranded in place), so
 -- every statement is conditional and becomes a no-op there. Existing volumes

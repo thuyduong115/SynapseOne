@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Renew cert (chay cron moi ngay 3h): renew + reload nginx neu cert doi.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

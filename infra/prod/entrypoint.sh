@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Render nginx conf tu template (thay @@DOMAIN@@) roi chon full-https hay http-only
 # tuy cert LE da ton tai chua. Chay trong container nginx (alpine/busybox sh).
 set -eu

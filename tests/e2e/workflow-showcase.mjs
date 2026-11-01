@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 VKU.VIC
 #!/usr/bin/env node
 /*
  * End-to-end showcase for the customer-360-orchestrator template.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 # Quickstart end-to-end: login -> org/account -> role/policy -> authorize -> workflow template
 # Idempotent: re-running is safe (reuses existing resources on 409).
 set -euo pipefail

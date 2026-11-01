@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 VKU.VIC
 """
 Synapse Inference Engine
 Multi-modal inference microservice providing LLM proxy (OpenRouter),

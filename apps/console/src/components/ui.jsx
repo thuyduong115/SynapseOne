@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 VKU.VIC
 /*
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -150,14 +152,18 @@ export function Err({ e }) {
   );
 }
 
-export function Modal({ title, onClose, children }) {
+export function Modal({ title, onClose, children, open }) {
   React.useEffect(() => {
+    if (open === false) return;
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, open]);
+
+  if (open === false) return null;
+
   const overlay = (
     <div
       role="dialog"
