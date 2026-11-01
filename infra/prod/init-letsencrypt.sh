@@ -22,11 +22,12 @@ echo "[le] 1/4 build + up edge http-only (xin cert can :80)..."
 $DC up -d --build nginx gateway console
 sleep 8
 
-ARGS="-d ${DOMAIN} -d cloud.${DOMAIN} -d api.${DOMAIN} -d synapsedx.sbs -d cloud.synapsedx.sbs -d api.synapsedx.sbs -d synapsecity.sbs"
+ARGS="-d ${DOMAIN} -d cloud.${DOMAIN} -d api.${DOMAIN} -d synapsedx.sbs -d cloud.synapsedx.sbs -d api.synapsedx.sbs -d synapsecity.sbs -d sos.synapsecity.sbs"
 if [ "$STAGING" = "1" ]; then ARGS="$ARGS --staging"; fi
 
 echo "[le] 2/4 certonly webroot..."
 $DC run --rm certbot certonly --webroot -w /var/www/certbot \
+  --cert-name "$DOMAIN" --expand \
   --email "$LE_EMAIL" --agree-tos --no-eff-email --keep-until-expiring \
   $ARGS
 

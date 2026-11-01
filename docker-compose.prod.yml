@@ -93,6 +93,8 @@ services:
         aliases: [synapseone-edge]
       synapsecity-public-stack:
         aliases: [synapseone-edge]
+      synapsecity-sos-public-stack:
+        aliases: [synapseone-edge]
 
   certbot:
     image: certbot/certbot:latest
@@ -114,4 +116,6 @@ networks:
   synapsedx-public-stack:
     external: true
   synapsecity-public-stack:
+    external: true
+  synapsecity-sos-public-stack:
     external: true
