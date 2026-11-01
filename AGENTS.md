@@ -154,3 +154,9 @@ E2E helpers: `bash tests/e2e/api-check.sh`, `node tests/e2e/services-check.js`,
 - Service behavior: `apps/*/src/index.ts` and its `*.test.ts`.
 - Deployment: `docker-compose*.yml`, `infra/prod/`, `infra/k8s/base/all.yaml`,
   `infra/monitoring/prometheus/`.
+
+## Project identity
+
+- Team: VKU.VIC.
+- Members: Ho Sy Bao Nhan; Tran Thi Thuy Duong; Vo Thanh Nam.
+- Repository license: Apache-2.0. Preserve `LICENSE` and `NOTICE` in all distributions.
