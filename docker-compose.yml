@@ -506,7 +506,9 @@ services:
         condition: service_healthy
       notifications:
         condition: service_healthy
-    networks: [synapseone-net]
+    networks:
+      synapseone-net:
+        aliases: [synapseone-gateway]
 
   console:
     build:
