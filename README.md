@@ -30,7 +30,7 @@ standard OIDC. Everything else is SynapseOne code, pure Apache-2.0.
 | **Synapse Faststore** | Redis-backed cache/KV and data structures: TTL strings, counters, hashes, lists, sets, sorted sets, scans, batches and distributed locks (`/v1/faststore`) |
 | **SynapseQueue** | At-least-once messaging: delayed/deduplicated publishing, visibility-timeout leases, ack/nack/heartbeat, retries, dead letters and replay (`/v1/queue`) |
 | **SynapseStream** | Tenant-scoped event log over Redis Streams/Kafka with consumer groups, acks and retention (`/v1/stream`) |
-| **SynapseObjectStorage** | Tenant-scoped buckets/objects with direct + multipart upload, presigned URLs, checksums, size/type limits and quotas (`/v1/storage`) |
+| **SynapseOCS** | Tenant-scoped buckets/objects with direct + multipart upload, presigned URLs, checksums, size/type limits and quotas (`/v1/ocs`, legacy `/v1/storage`) |
 | **SynapseNotifications** | Durable outbox + `{{var}}` templates, per-recipient preferences/unsubscribe, email/SMS/push relays, webhooks, retries and dead letters (`/v1/notifications`) |
 | **Workflows** | Built-in workflow engine (Apache-2.0): DAG runner, versioned templates, activate/deactivate/execute (real webhook & cron triggers), sandboxed code execution, execution history, visual graph editor |
 | **Linked Data (SynapseLDS)** | Licence-picked NGSI-LD datasources: structural-allowlist projection (`_core` never serialized), per-attribute visibility (public/restricted/internal), default-deny schema registry, workflow publish node (`lds.publish-record`) |
@@ -159,7 +159,7 @@ apps/base-service          SynapseBase — documents, mapping, queries, change f
 apps/faststore-service     Synapse Faststore — cache/KV, data structures, locks
 apps/queue-service         SynapseQueue — publish/consume, leases, retries, DLQ
 apps/stream-service        SynapseStream — topics, consumer groups, acks
-apps/storage-service       SynapseObjectStorage — objects, multipart, presign, quotas
+apps/ocs-service       SynapseOCS — objects, multipart, presign, quotas
 apps/notifications-service SynapseNotifications — outbox, templates, preferences
 sdks/sdk-js                @synapseone/sdk (TypeScript, zero runtime deps)
 sdks/sdk-python            synapseone-sdk (Python, requests only)
@@ -187,7 +187,7 @@ docs                       Start at docs/README.md
 | `docs/configuration.md` | Every environment variable |
 | `docs/production.md` | Production checklist (secrets, TLS, edge) |
 | `docs/console.md` | Operating the Console |
-| `docs/object-storage.md` | SynapseObjectStorage API + S3-compatible backends |
+| `docs/object-storage.md` | SynapseOCS bucket/object API + S3/MinIO backends |
 | `docs/notifications.md` | SynapseNotifications — templates, preferences, delivery, retries |
 | `docs/troubleshooting.md` | Common failures and fixes |
 

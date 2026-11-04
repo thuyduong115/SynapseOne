@@ -19,7 +19,7 @@ stamping, edge hardening, telemetry, aggregate readiness.
 upstreams. `routes.yaml` covers `/v1/auth`, IAM resources, `/v1/workflows`,
 `/v1/templates`, `/v1/executions`, `/v1/credentials`, public `/webhook`,
 `/v1/ai`, `/v1/inference`, LDS public + management, `/v1/base`,
-`/v1/faststore`, `/v1/queue`, `/v1/stream`, `/v1/storage`, `/v1/notifications`.
+`/v1/faststore`, `/v1/queue`, `/v1/stream`, `/v1/ocs` (legacy `/v1/storage`), `/v1/notifications`.
 
 **Rules:**
 - Auth modes per route: `none|jwt|apikey|either`; route specificity by literal

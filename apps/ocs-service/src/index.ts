@@ -3,7 +3,7 @@
 /*
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License").
- * SynapseObjectStorage — tenant-scoped object/file storage (#24).
+ * SynapseOCS — bucket-aware object cloud storage (legacy /v1/storage kept).
  *
  * Direct binary upload/download (no base64 in JSON), presigned URLs (S3),
  * multipart uploads, checksums, size/type limits and per-tenant quotas.
@@ -16,6 +16,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
 import { createBackend, checksumHex, validateKey, type Backend } from './backend';
+import { registerOcsRoutes } from './ocs';
 
 dotenv.config();
 
@@ -130,13 +131,23 @@ export function createApp(backend: Backend = createBackend()): express.Express {
   if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/health', (_req, res) => res.json({ service: 'storage', status: 'ok', version: VERSION, backend: backend.name, time: new Date().toISOString() }));
+  app.get('/health', (_req, res) => res.json({
+    service: 'storage',
+    product: 'SynapseOCS',
+    status: 'ok',
+    version: VERSION,
+    backend: backend.name,
+    capabilities: { buckets: true, objects: true, presign: Boolean(backend.presign), multipart: Boolean(backend.createMultipart) },
+    time: new Date().toISOString(),
+  }));
   app.get('/metrics', (_req, res) => {
     res.setHeader('content-type', 'text/plain; version=0.0.4');
-    res.send(`# HELP synapseone_storage_up Service up status\n# TYPE synapseone_storage_up gauge\nsynapseone_storage_up 1\nsynapseone_storage_backend{backend="${backend.name}"} 1\n`);
+    res.send(`# HELP synapseone_storage_up Service up status\n# TYPE synapseone_storage_up gauge\nsynapseone_storage_up 1\nsynapseone_ocs_up 1\nsynapseone_storage_backend{backend="${backend.name}"} 1\n`);
   });
 
-  app.use('/v1/storage', (req, res, next) => {
+  const attachTenant = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // HMAC-signed public URLs carry their own tenant/bucket/key scope.
+    if (req.originalUrl.split('?')[0] === '/v1/ocs/signed') return next();
     if (IS_PROD && !verifyInternal(req)) {
       return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid internal secret' });
     }
@@ -144,7 +155,10 @@ export function createApp(backend: Backend = createBackend()): express.Express {
     if (!tenant) return res.status(401).json({ error: 'tenant_required', message: 'Authenticated principal or x-synapseone-tenant required' });
     (req as any).tenant = tenant;
     next();
-  });
+  };
+
+  app.use('/v1/storage', attachTenant);
+  app.use('/v1/ocs', attachTenant);
 
   const raw = express.raw({ type: () => true, limit: MAX_OBJECT_BYTES });
 
@@ -325,6 +339,12 @@ export function createApp(backend: Backend = createBackend()): express.Express {
     }
   });
 
+  registerOcsRoutes(app, backend, {
+    maxObjectBytes: MAX_OBJECT_BYTES,
+    tenantQuotaBytes: TENANT_QUOTA_BYTES,
+    allowedTypes: ALLOWED_TYPES,
+  });
+
   app.use((_req, res) => res.status(404).json({ error: 'not_found' }));
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (err?.type === 'entity.too.large' || err?.status === 413) {
@@ -338,7 +358,7 @@ export function createApp(backend: Backend = createBackend()): express.Express {
 
 if (require.main === module) {
   const app = createApp();
-  const server = app.listen(PORT, () => console.log(`[storage] listening on :${PORT}`));
+  const server = app.listen(PORT, () => console.log(`[ocs] SynapseOCS listening on :${PORT}`));
   const shutdown = () => server.close(() => process.exit(0));
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);

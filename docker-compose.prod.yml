@@ -84,9 +84,10 @@ services:
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:?SYNAPSEONE_INTERNAL_SECRET must be set in production}
     ports: !reset []
 
-  storage:
+  ocs:
     environment:
       NODE_ENV: production
+      OCS_PUBLIC_BASE_URL: ${OCS_PUBLIC_BASE_URL:-https://api.synapseone.space}
       HSTS_ENABLED: "true"
       STORAGE_BACKEND: s3
       STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-http://s3:9090}

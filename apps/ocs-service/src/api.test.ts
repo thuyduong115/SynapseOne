@@ -3,7 +3,7 @@
 /*
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License");
- * SynapseObjectStorage tests: tenant scoping, binary upload/download,
+ * SynapseOCS legacy default-bucket tests: tenant scoping, binary upload/download,
  * checksums, listing, quotas, multipart and presign behaviour.
  */
 import { test, before, after, beforeEach } from 'node:test';
