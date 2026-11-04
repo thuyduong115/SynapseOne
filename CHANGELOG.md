@@ -5,6 +5,12 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Added
+- Security/quality workflows with CodeQL (TypeScript + Python), dependency
+  review, actionlint, Dependabot and PR template.
+- Tier-1 roadmap issues for durable human tasks, SCIM, search, secrets, audit
+  export and release signing (#44–#49).
+
 ## [0.7.1] - 2026-11-04
 
 ### Fixed
