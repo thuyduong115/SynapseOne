@@ -565,7 +565,9 @@ def test_ocs_namespace_routes_bucket_and_object_calls():
         assert _seen["path"] == "/v1/ocs/buckets"
         assert json.loads(_seen["body"]) == {"name": "media", "quotaBytes": 1024}
 
-        assert c.ocs.put_object("media", "a/b.txt", b"hello", content_type="text/plain") == {"ok": True}
+        assert c.ocs.put_object(
+            "media", "a/b.txt", b"hello", content_type="text/plain"
+        ) == {"ok": True}
         assert _seen["method"] == "PUT"
         assert _seen["path"] == "/v1/ocs/buckets/media/objects/a/b.txt"
 

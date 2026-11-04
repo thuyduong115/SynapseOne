@@ -54,7 +54,9 @@ class OcsService:
 
     def delete_bucket(self, name: str, force: bool = False) -> dict:
         suffix = "?force=true" if force else ""
-        return self._http.request("DELETE", f"{_PREFIX}/buckets/{_segment(name)}{suffix}")
+        return self._http.request(
+            "DELETE", f"{_PREFIX}/buckets/{_segment(name)}{suffix}"
+        )
 
     # ---- objects ----
     def put_object(
