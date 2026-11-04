@@ -98,6 +98,14 @@ describe('iam principal authorization', () => {
     assert.equal(scopesAllow(['storage:*'], 'base:Read'), false);
     assert.equal(scopesAllow(['workflow:Execute'], 'workflow:Execute'), true);
     assert.equal(scopesAllow([], 'base:Read'), false);
+    // Gateway scope grammar (main's default key scope is `*:read`).
+    assert.equal(scopesAllow(['*:read'], 'base:Read'), true);
+    assert.equal(scopesAllow(['*:read'], 'base:Write'), false);
+    assert.equal(scopesAllow(['base:read'], 'base:Read'), true);
+    assert.equal(scopesAllow(['base:read'], 'queue:Read'), false);
+    assert.equal(scopesAllow(['base:write'], 'base:Delete'), true);
+    assert.equal(scopesAllow(['*:write'], 'workflow:Execute'), true);
+    assert.equal(scopesAllow(['workflow:execute'], 'workflow:Execute'), true);
   });
 
   it('first user of an org becomes its administrator; later users do not', async () => {

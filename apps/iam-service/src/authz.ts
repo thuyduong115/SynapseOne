@@ -57,9 +57,27 @@ export interface Decision {
   account?: string;
 }
 
-/** Does any scope pattern cover `action`? (`*`, `base:*`, `base:Read`, …) */
+/** Verbs that the gateway scope grammar (`*:read`, `<service>:read`) treats as reads. */
+const READ_VERBS = new Set(['read', 'get', 'list', 'describe']);
+
+/** Gateway scope grammar (apps/gateway/src/scopes.ts): `*:read`, `*:write`,
+ *  `<service>:read|write|*` or a concrete lower-case verb, matched against an
+ *  IAM action `<service>:<Verb>` case-insensitively. */
+function gatewayScopeAllows(scope: string, action: string): boolean {
+  const [sSvc, sVerb] = scope.toLowerCase().split(':');
+  const [aSvc, aVerb] = action.toLowerCase().split(':');
+  if (!sVerb || !aVerb) return false;
+  if (sSvc !== '*' && sSvc !== aSvc) return false;
+  if (sVerb === '*' || sVerb === aVerb) return true;
+  if (sVerb === 'read') return READ_VERBS.has(aVerb);
+  if (sVerb === 'write') return !READ_VERBS.has(aVerb);
+  return false;
+}
+
+/** Does any scope cover `action`? Accepts IAM action patterns (`*`, `base:*`,
+ *  `base:Read`) and the gateway scope grammar (`*:read`, `base:write`). */
 export function scopesAllow(scopes: string[] | undefined, action: string): boolean {
-  return (scopes || []).some((s) => matchPattern(s, action));
+  return (scopes || []).some((s) => matchPattern(s, action) || gatewayScopeAllows(s, action));
 }
 
 // ---------- AWS-style managed policies ----------
