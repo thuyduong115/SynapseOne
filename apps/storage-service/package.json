@@ -1,6 +1,6 @@
 {
   "name": "@synapseone/storage-service",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "license": "Apache-2.0",
   "description": "SynapseObjectStorage - tenant-scoped object storage with filesystem (dev) and S3-compatible (prod) backends",
   "main": "dist/index.js",

@@ -5,6 +5,27 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-04
+
+### Fixed
+- CI ruff gate: sorted imports, removed unused variables and applied
+  `ruff format` across `sdks/sdk-python` and `apps/inference-service`.
+- Public gateway network alias is kept on the edge network so TLS upstreams
+  keep resolving after Compose re-creation.
+- Tier-1 audit gaps: password lifecycle, delegated token exchange, scope
+  enforcement, OIDC guards, object storage and notification delivery services,
+  inference streaming/metering, stream hardening, typed health/readiness,
+  indexed Base query pushdown, data-plane audit and safe queue receipts.
+- Python SDK transport/export coverage and documentation corrections.
+- Edge routing: SynapseCity console is served at the domain root and the
+  SynapseCitySOS domain plus SSE routing are published.
+
+### Added
+- Apache-2.0 SPDX enforcement, license-check tooling and CI quality gates.
+- `SynapseOneClient` defaults to `https://synapseone.space`; quickstarts
+  cleaned up for the public endpoint.
+- VKU.VIC project identity and licensing documentation.
+
 ## [0.7.0] - 2026-10-31
 
 ### Changed - SynapseDX renamed to SynapseOne
