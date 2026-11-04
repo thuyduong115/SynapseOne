@@ -454,7 +454,29 @@ visibility 1..3600s (default 30), delay ≤7 days, consume/ack/publish batch ≤
 payload ≤ `QUEUE_MAX_PAYLOAD_BYTES` (default 256 KiB). Dedupe suppresses duplicates
 only while the original message still exists.
 
-## Object storage (`storage-service:4010`, gateway `/v1/storage`)
+## SynapseOCS object storage (`ocs:4010`, gateway `/v1/ocs`)
+
+SynapseOCS adds bucket-aware APIs while keeping the legacy default-bucket
+`/v1/storage` routes. Buckets and objects are tenant-scoped; cross-tenant
+access returns `404`.
+
+| Method | Route | Description |
+| --- | --- | --- |
+| GET | `/v1/ocs/buckets` | List buckets (`withStats=1` adds object/byte counts). |
+| POST | `/v1/ocs/buckets` | Create `{name, quotaBytes?}`. |
+| GET/HEAD | `/v1/ocs/buckets/:bucket` | Bucket metadata/usage. |
+| GET | `/v1/ocs/buckets/:bucket/stats` | `{objects, bytes, quotaBytes}`. |
+| DELETE | `/v1/ocs/buckets/:bucket?force=true` | Delete an empty bucket, or all objects with `force`. |
+| PUT/GET/HEAD/DELETE | `/v1/ocs/buckets/:bucket/objects/*` | Raw object body; checksum, range and conditional headers supported. |
+| GET | `/v1/ocs/buckets/:bucket/objects?prefix=&delimiter=&limit=&cursor=` | List with common prefixes. |
+| POST | `/v1/ocs/buckets/:bucket/objects/copy` | Copy `{sourceBucket?,sourceKey,destinationKey,contentType?}`. |
+| POST | `/v1/ocs/buckets/:bucket/presign` | `{key,method?,expiresIn?}` → HMAC-signed `{url}` (both backends). |
+| POST | `/v1/ocs/buckets/:bucket/uploads` | Start multipart `{key,contentType}`. |
+| PUT | `/v1/ocs/buckets/:bucket/uploads/:id/parts/:n?key=...` | Upload a raw part. |
+| POST | `/v1/ocs/buckets/:bucket/uploads/:id/complete` | Complete `{key,parts}`. |
+| DELETE | `/v1/ocs/buckets/:bucket/uploads/:id?key=...` | Abort an upload. |
+
+## Legacy object storage (`/v1/storage`)
 
 Tenant-scoped object/file storage. See `docs/object-storage.md` for the backend
 configuration and SDK examples.

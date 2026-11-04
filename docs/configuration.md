@@ -17,7 +17,7 @@ reads which key (audited from source):
 | `QUEUE_SERVICE_URL` | `http://queue:4007` | SynapseQueue upstream |
 | `STREAM_SERVICE_URL` | `http://stream:4009` | SynapseStream upstream (also probed by `/ready`) |
 | `INFERENCE_SERVICE_URL` | `http://inference:4008` | Inference upstream (also probed by `/ready`) |
-| `STORAGE_SERVICE_URL` | `http://storage:4010` | SynapseObjectStorage upstream |
+| `OCS_SERVICE_URL` | `http://ocs:4010` | SynapseOCS upstream |
 | `NOTIFICATIONS_SERVICE_URL` | `http://notifications:4011` | SynapseNotifications upstream |
 | `IAM_JWT_SECRET` | — | **must match** IAM, used to verify Bearer tokens |
 | `GATEWAY_ROUTES_PATH` | `./routes.yaml` | routing table |
@@ -164,7 +164,7 @@ API-key traffic of one org share the `org:<id>` namespace and usage attribution 
 | `SYNAPSEONE_INTERNAL_SECRET` | — | required in production |
 | `CORS_ORIGIN` | — | required in production (wildcard CORS is rejected) |
 
-## Object storage (`apps/storage-service`)
+## Object storage (`apps/ocs-service`)
 
 See `docs/object-storage.md`. Key settings: `STORAGE_BACKEND` (`fs|s3`, required in
 production), `STORAGE_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY/PATH_STYLE`,

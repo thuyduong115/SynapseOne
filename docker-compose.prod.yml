@@ -84,7 +84,7 @@ services:
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:?SYNAPSEONE_INTERNAL_SECRET must be set in production}
     ports: !reset []
 
-  storage:
+  ocs:
     environment:
       NODE_ENV: production
       HSTS_ENABLED: "true"

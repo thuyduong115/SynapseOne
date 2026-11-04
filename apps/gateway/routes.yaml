@@ -128,9 +128,19 @@ routes:
     target: ${STREAM_SERVICE_URL:http://stream:4009}
     auth: either
 
-  # SynapseObjectStorage — tenant-scoped object/file storage (S3-compatible).
+  # SynapseOCS — bucket-aware object cloud storage (S3/MinIO-compatible backend).
+  - path: /v1/ocs
+    target: ${OCS_SERVICE_URL:http://ocs:4010}
+    auth: either
+
+  # HMAC-signed public object URLs; the token is the credential.
+  - path: /v1/ocs/signed
+    target: ${OCS_SERVICE_URL:http://ocs:4010}
+    auth: none
+
+  # Legacy SynapseOCS default-bucket API (kept for existing files clients).
   - path: /v1/storage
-    target: ${STORAGE_SERVICE_URL:http://storage:4010}
+    target: ${STORAGE_SERVICE_URL:http://ocs:4010}
     auth: either
 
   # SynapseNotifications — outbox, templates, preferences and delivery.

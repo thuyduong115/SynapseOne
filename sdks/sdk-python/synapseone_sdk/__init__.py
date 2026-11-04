@@ -57,6 +57,7 @@ from .iam import IamService
 from .inference import InferenceService
 from .lds import LdsService
 from .notifications import NotificationsService
+from .ocs import OcsService
 from .queue import QueueService
 from .storage import StorageService
 from .stream import StreamService
@@ -74,6 +75,7 @@ __all__ = [
     "LdsService",
     "QueryResult",
     "VectorSearchResult",
+    "OcsService",
     "QueueService",
     "StreamService",
     "StorageService",
@@ -130,6 +132,7 @@ class SynapseOneClient:
         self.health = HealthService(self._http)
         self.readiness = self.health
         self.storage = StorageService(self._http)
+        self.ocs = OcsService(self._http)
         self.notifications = NotificationsService(self._http)
 
     # ---- transport knobs (also mirrored by JS setToken/setApiKey and Go) ----

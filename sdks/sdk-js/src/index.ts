@@ -34,6 +34,7 @@ import { InferenceService } from './inference';
 import { AiService } from './ai';
 import { HealthService } from './health';
 import { StorageService } from './storage';
+import { OcsService } from './ocs';
 import { NotificationsService } from './notifications';
 
 export * from './_http';
@@ -48,6 +49,7 @@ export * from './stream';
 export * from './inference';
 export * from './health';
 export * from './storage';
+export * from './ocs';
 export * from './notifications';
 
 /** Legacy flat LDS signatures (the namespaced service drops the `lds` prefix). */
@@ -78,6 +80,8 @@ export class SynapseOneClient {
   readonly stream: StreamService;
   readonly inference: InferenceService;
   readonly storage: StorageService;
+  /** SynapseOCS bucket/object API; `storage` remains the default-bucket alias. */
+  readonly ocs: OcsService;
   readonly notifications: NotificationsService;
   readonly health: HealthService;
   readonly readiness: HealthService;
@@ -94,6 +98,7 @@ export class SynapseOneClient {
     this.stream = new StreamService(this.http);
     this.inference = new InferenceService(this.http);
     this.storage = new StorageService(this.http);
+    this.ocs = new OcsService(this.http);
     this.notifications = new NotificationsService(this.http);
     this.health = new HealthService(this.http);
     // Alias: `client.readiness.ready()` reads naturally; same instance.

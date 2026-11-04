@@ -38,6 +38,7 @@ await c.workflow.createWorkflowFromTemplate('webhook-to-log', 'demo');
 
 ```ts
 import { SynapseOneClient } from '@synapseone/sdk';
+import { OcsService } from '@synapseone/sdk/ocs';
 import { StorageService } from '@synapseone/sdk/storage';
 import { NotificationsService } from '@synapseone/sdk/notifications';
 import { InferenceService, parseChatDelta } from '@synapseone/sdk/inference';

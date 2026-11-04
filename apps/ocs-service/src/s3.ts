@@ -3,7 +3,7 @@
 /*
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License");
- * Minimal S3-compatible client (SigV4) used by SynapseObjectStorage in
+ * Minimal S3-compatible client (SigV4) used by SynapseOCS in
  * production. No SDK dependency: AWS S3, MinIO and S3Mock all implement the
  * same HTTP contract.
  */

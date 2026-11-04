@@ -809,7 +809,8 @@ if __name__ == "__main__":
 ## 0.7.x additions
 
 - `client.iam.register/login_with_password/change_password/request_password_reset/reset_password/verify_email/list_sessions/revoke_session` and `exchange_token` for Tier-2 delegated identity.
-- `client.storage` — `put_object/get_object/head_object/list_objects/delete_object/presign` + multipart.
+- `client.ocs` — buckets (`create_bucket/list_buckets/get_bucket/delete_bucket`) and objects (`put_object/get_object/head_object/list_objects/copy_object/presign`) + multipart.
+- `client.storage` — default-bucket compatibility (`put_object/get_object/head_object/list_objects/delete_object/presign`) + multipart.
 - `client.notifications` — `send/get/list/cancel/get_preference/set_preference/unsubscribe`.
 - `client.inference.chat_stream(...)` yields SSE `(event, data)`; `iter_text(...)` projects incremental text, `parse_chat_delta(data)` parses one frame.
 - `client.health.health()/ready()/status()`: `ready()` returns the degraded payload on 503 instead of raising (pass `throw_on_degraded=True` for strict probes).

@@ -52,7 +52,7 @@ Skip: `node_modules/`, `apps/*/dist/`, `.pytest_cache/`, `.ruff_cache/`,
 | `apps/faststore-service` | Synapse Faststore cache/KV/data structures/locks | 4006 | Redis / memory |
 | `apps/queue-service` | SynapseQueue messaging, leases, retries, DLQ | 4007 | Redis / memory |
 | `apps/stream-service` | SynapseStream tenant-scoped event log | 4009 | Redis Streams / memory |
-| `apps/storage-service` | SynapseObjectStorage objects, multipart, presign, quotas | 4010 | S3 / filesystem |
+| `apps/ocs-service` | SynapseOCS objects, multipart, presign, quotas | 4010 | S3 / filesystem |
 | `apps/notifications-service` | SynapseNotifications outbox, templates, preferences, delivery | 4011 | Postgres / memory + queue |
 | `apps/inference-service` | Python FastAPI LLM proxy + embeddings + decision | 4008 | local models / OpenRouter |
 | `apps/console` | Admin UI | 3000 (nginx :80) | calls gateway |
@@ -104,7 +104,7 @@ Postgres · Redis · S3-compatible object storage · notification relays
 9. **New public paths need a gateway route** in `apps/gateway/routes.yaml`,
    otherwise the gateway returns 404 before the upstream sees the request.
    New services in this version: stream (`/v1/stream`), storage
-   (`/v1/storage`), notifications (`/v1/notifications`).
+   (`/v1/ocs`, legacy `/v1/storage`), notifications (`/v1/notifications`).
 10. **Scopes are enforced at the gateway.** API keys/delegated tokens must hold
     a matching `<service>:read|write|*` scope; user JWTs carry `*`. Minting a
     key/SA token can never widen the caller's scopes.

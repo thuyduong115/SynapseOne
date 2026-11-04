@@ -382,10 +382,10 @@ services:
       start_period: 20s
     networks: [synapseone-net]
 
-  storage:
+  ocs:
     build:
-      context: ./apps/storage-service
-    image: synapseone/storage:0.7.0
+      context: ./apps/ocs-service
+    image: synapseone/ocs:0.7.1
     restart: unless-stopped
     environment:
       PORT: 4010
@@ -400,6 +400,7 @@ services:
       STORAGE_MAX_OBJECT_BYTES: ${STORAGE_MAX_OBJECT_BYTES:-26214400}
       STORAGE_TENANT_QUOTA_BYTES: ${STORAGE_TENANT_QUOTA_BYTES:-5368709120}
       STORAGE_ALLOWED_CONTENT_TYPES: ${STORAGE_ALLOWED_CONTENT_TYPES:-}
+      OCS_PUBLIC_BASE_URL: ${OCS_PUBLIC_BASE_URL:-https://api.synapseone.space}
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:-${SYNAPSEDX_INTERNAL_SECRET:-}}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
       HSTS_ENABLED: ${HSTS_ENABLED:-false}
@@ -416,7 +417,9 @@ services:
     depends_on:
       s3-init:
         condition: service_completed_successfully
-    networks: [synapseone-net]
+    networks:
+      synapseone-net:
+        aliases: [storage]
 
   notifications:
     build:
@@ -450,12 +453,14 @@ services:
         condition: service_healthy
       queue:
         condition: service_healthy
-    networks: [synapseone-net]
+    networks:
+      synapseone-net:
+        aliases: [storage]
 
   gateway:
     build:
       context: ./apps/gateway
-    image: synapseone/gateway:0.7.0
+    image: synapseone/gateway:0.7.1
     restart: unless-stopped
     environment:
       PORT: 8080
@@ -468,7 +473,8 @@ services:
       FASTSTORE_SERVICE_URL: ${FASTSTORE_SERVICE_URL:-http://faststore:4006}
       QUEUE_SERVICE_URL: ${QUEUE_SERVICE_URL:-http://queue:4007}
       STREAM_SERVICE_URL: ${STREAM_SERVICE_URL:-http://stream:4009}
-      STORAGE_SERVICE_URL: ${STORAGE_SERVICE_URL:-http://storage:4010}
+      STORAGE_SERVICE_URL: ${STORAGE_SERVICE_URL:-http://ocs:4010}
+      OCS_SERVICE_URL: ${OCS_SERVICE_URL:-http://ocs:4010}
       NOTIFICATIONS_SERVICE_URL: ${NOTIFICATIONS_SERVICE_URL:-http://notifications:4011}
       TRUST_PROXY: ${TRUST_PROXY:-}
       IAM_JWT_SECRET: ${IAM_JWT_SECRET:-change_me_super_secret_32chars_min}
@@ -502,7 +508,7 @@ services:
         condition: service_healthy
       stream:
         condition: service_healthy
-      storage:
+      ocs:
         condition: service_healthy
       notifications:
         condition: service_healthy

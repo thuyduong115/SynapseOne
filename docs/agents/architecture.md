@@ -20,7 +20,7 @@ Browser / CLI / SDK
     │      │      │      │                 │
     └──────┴──────┴──────┴─── Postgres 16 ─┘
                   Redis 7 (Faststore + Queue)
-                  S3-compatible object storage (storage-service)
+                  S3-compatible object storage (SynapseOCS)
 ```
 
 - Console is a static React SPA served by nginx (`:3000` in Compose, `:80`
@@ -178,7 +178,7 @@ edit an applied migration; add a new one.
 
 ### Object storage
 
-`storage-service` exposes tenant-scoped object storage at `/v1/storage`
+`SynapseOCS` exposes bucket-aware object storage at `/v1/ocs` (legacy `/v1/storage` remains the default bucket)
 (direct + multipart upload, presigned URLs, checksums, quotas) over S3Mock in
 dev and MinIO/AWS S3 in production. Tier-3 products upload files and store the
 returned key instead of embedding base64 data URLs.
@@ -258,7 +258,7 @@ headers; `_core` is never read.
   gateway uses an in-memory per-IP limiter; no Redis client is imported there.
 - API-key **scopes** are stored and returned by IAM, but the gateway does not
   enforce them yet (roadmap). Do not assume scope-based restrictions.
-- Object storage is exposed by `storage-service` (`/v1/storage`); notifications by
+- Object storage is exposed by `SynapseOCS` (`/v1/ocs`; legacy `/v1/storage`); notifications by
   `notifications-service` (`/v1/notifications`).
 - `apps/tunnel-service/` contains only stale `dist/` artifacts and no source or
   package manifest; it is not part of the workspace.

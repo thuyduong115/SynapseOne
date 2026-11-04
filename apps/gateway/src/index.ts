@@ -562,7 +562,7 @@ export function createApp(): express.Express {
     const queueUrl = process.env.QUEUE_SERVICE_URL || 'http://queue:4007';
     const streamUrl = process.env.STREAM_SERVICE_URL;
     const inferenceUrl = process.env.INFERENCE_SERVICE_URL;
-    const storageUrl = process.env.STORAGE_SERVICE_URL;
+    const ocsUrl = process.env.OCS_SERVICE_URL || process.env.STORAGE_SERVICE_URL;
     const notificationsUrl = process.env.NOTIFICATIONS_SERVICE_URL;
     const probeList = [
       probe('iam', iamUrl), probe('workflow', wfUrl), probe('ai', aiUrl), probe('lds', ldsUrl),
@@ -571,7 +571,7 @@ export function createApp(): express.Express {
     if (streamUrl) probeList.push(probe('stream', streamUrl));
     // Inference is a routed dependency; probe it whenever its URL is configured.
     if (inferenceUrl) probeList.push(probe('inference', inferenceUrl));
-    if (storageUrl) probeList.push(probe('storage', storageUrl));
+    if (ocsUrl) probeList.push(probe('ocs', ocsUrl));
     if (notificationsUrl) probeList.push(probe('notifications', notificationsUrl));
     const upstreams = await Promise.all(probeList);
     const allOk = upstreams.every((u) => u.ok);
