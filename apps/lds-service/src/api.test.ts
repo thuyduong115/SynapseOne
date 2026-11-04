@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import type { Server } from 'http';
 import { createApp } from './index';
 import { __clearLdsMem } from './store';
+import { __auditEvents, __clearAudit } from './audit';
 
 let server: Server;
 let base = '';
@@ -391,4 +392,29 @@ test('defaultVisibility applies to registry entries that omit visibility; restri
   assert.equal(restricted.res.headers.get('cache-control'), 'private, no-store');
   const publicExp = await call('GET', `/v1/lds/datasources/${ds.id}/entities`);
   assert.equal(publicExp.res.headers.get('cache-control'), 'public, max-age=60');
+});
+
+test('mutation audit records actor, tenant, action and result (#32)', async () => {
+  __clearAudit();
+  const made = await createDatasource({ name: 'Audited Registry' });
+  assert.ok(made.id);
+  await new Promise((r) => setImmediate(r));
+
+  const event = __auditEvents().find((e) => e.action === 'lds:datasources:create');
+  assert.ok(event, JSON.stringify(__auditEvents()));
+  assert.equal(event.actorType, 'user');
+  assert.equal(event.actorId, 'user-1');
+  assert.equal(event.orgId, 'tenant-danang');
+  assert.equal(event.result, 'allowed');
+  assert.equal(event.statusCode, 201);
+
+  const denied = await call('POST', '/v1/lds/datasources', { name: 'Bad', entityType: 'Thing', license: 'MIT' });
+  assert.equal(denied.status, 400);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(__auditEvents().some((e) => e.action === 'lds:datasources:create' && e.result === 'denied'));
+
+  const before = __auditEvents().length;
+  await call('GET', '/v1/lds/datasources');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(__auditEvents().length, before, 'reads must not add mutation events');
 });

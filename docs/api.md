@@ -37,8 +37,23 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
 
 ## Auth
 
-- `POST /v1/auth/login {email, orgSlug}` → `{accessToken, refreshToken, user}`
-  (dev sign-in; disable in production with `IAM_ALLOW_DEV_LOGIN=false`)
+- `POST /v1/auth/login {email, password, orgSlug?}` → `{accessToken, refreshToken, user}`
+  (first-party email+password; works in production). Omitting `password` uses the
+  passwordless dev path, which is disabled when `IAM_ALLOW_DEV_LOGIN=false`.
+- `POST /v1/auth/register {email, password, orgSlug?, displayName?}` → token set (201).
+  A brand-new org is self-service; joining an existing org requires an invitation
+  (`403 org_membership_required` otherwise). Password policy: 12–128 chars.
+- `POST /v1/auth/password/change {currentPassword, newPassword}` → `{ok, revokedSessions}`
+- `POST /v1/auth/password/forgot {email, orgSlug?}` → `202 {ok}` (no account enumeration;
+  dev responses may include `resetToken` when no mailer is configured)
+- `POST /v1/auth/password/reset {token, newPassword}` → `{ok, revokedSessions}`
+- `POST /v1/auth/email/verify {token}` → `{ok, emailVerified}`
+- `POST /v1/auth/email/verify/request` (Bearer) → `{ok, emailVerificationToken?}`
+- `GET /v1/auth/sessions` (Bearer) → refresh-token sessions
+- `DELETE /v1/auth/sessions/:id` (Bearer) → revoke one session
+- `POST /v1/auth/exchange {userId, accountId?, orgId?, scopes?, audience?, ttlSeconds?}`
+  (service-account Bearer or API key) → `{accessToken (kind=delegated), expiresIn, ...}`.
+  Refuses cross-tenant targets (`403 cross_tenant`) and scope escalation; audited.
 - `POST /v1/auth/refresh {refreshToken}` → `{accessToken, refreshToken}` (rotation: the old token is revoked)
 - `POST /v1/auth/logout {refreshToken}` → `{ok}`
 - `POST /v1/auth/logout-all {refreshToken}` → `{ok, revoked}` (revokes all of your own sessions)
@@ -87,13 +102,13 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
   strictly account-bound) — otherwise `403 forbidden`. Reads stay open; org creation
   stays open (bootstrap).
 - `POST /v1/authorize/dry-run {documents[], action, resource, context?}` → `{allowed}` (simulator, no user needed)
-- `GET /v1/audit?limit=50&actor=<id>&allowed=true|false` → authorize-decision audit log (newest first, limit clamped 1..200)
+- `GET /v1/audit?limit=50&offset=0&actor=&allowed=&action=&resource=&from=&to=` → tenant-scoped audit log (authorize decisions, IAM mutations **and** Base/Faststore/Queue/Stream/Workflow/LDS writes; newest first, limit clamped 1..200, offset ≤100000). Data-plane services post batched events to the internal `POST /v1/audit/ingest` (internal secret required; not a public route).
 
 ## Keys
 
-- `POST /v1/accounts/:accountId/keys {name, scopes, expiresInSeconds?}` → `{apiKey (shown once), id, prefix}`
+- `POST /v1/accounts/:accountId/keys {name, scopes?, userId?, expiresInSeconds?}` → `{apiKey (shown once), id, prefix}`. `scopes` defaults to least-privilege `["*:read"]`; pass `["*"]` explicitly for an admin key. Scopes outside the caller's authority → `403 scope_escalation`.
 - `GET /v1/accounts/:accountId/keys` → key metadata list (id/name/prefix/scopes/expiry/revoked — never secret values)
-- `POST /v1/keys/verify {apiKey}` → `{valid, account_id, scopes}`
+- `POST /v1/keys/verify {apiKey}` → `{valid, account_id, org_id, scopes}`
 - `DELETE /v1/keys/:id` → revokes the key
 
 ## Service accounts (machine identity)
@@ -102,18 +117,18 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
 - `GET /v1/accounts/:accountId/service-accounts` → list
 - `POST /v1/service-accounts/:id/token {scopes?}` → `{accessToken (kind=service-account), expiresIn}`
 
-## Credentials (PROPOSED contract — backend in progress, do not rely on yet)
+## Credentials (workflow node secrets — implemented)
 
-Account-scoped secrets for workflow nodes. Secrets are encrypted at rest and
-NEVER returned: create/rotate accept a `secret` once; list/get return metadata
-only (`{id, name, type, accountId, expiresAt, version}`). `type` is one of
-`bearer|basic|apiKey|oauth2`.
+Account-scoped secrets for workflow nodes. Secrets are AES-256-GCM encrypted at
+rest and NEVER returned: create/rotate accept a `secret` once; list/get return
+metadata only (`{id, name, kind, accountId, createdAt, updatedAt}`). Implemented
+`kind` values: `bearer|api-key|basic|hmac` (legacy alias `type` accepted).
 
-- `POST /v1/accounts/:accountId/credentials {name, type, secret, expiresAt?}` → metadata (201)
+- `POST /v1/accounts/:accountId/credentials {name, kind|type, secret}` → metadata (201)
 - `GET /v1/accounts/:accountId/credentials` → `[metadata]`
 - `GET /v1/credentials/:id` → metadata
 - `DELETE /v1/credentials/:id` → `{ok}`
-- `POST /v1/credentials/:id/rotate {secret}` → metadata (bumps `version`)
+- `POST /v1/credentials/:id/rotate {secret}` → metadata
 
 ## Workflows (local built-in engine)
 
@@ -438,6 +453,33 @@ attempts, so consumers must be idempotent. `maxAttempts` 1..100 (default 5),
 visibility 1..3600s (default 30), delay ≤7 days, consume/ack/publish batch ≤100,
 payload ≤ `QUEUE_MAX_PAYLOAD_BYTES` (default 256 KiB). Dedupe suppresses duplicates
 only while the original message still exists.
+
+## Object storage (`storage-service:4010`, gateway `/v1/storage`)
+
+Tenant-scoped object/file storage. See `docs/object-storage.md` for the backend
+configuration and SDK examples.
+
+- `PUT /v1/storage/objects/*` — raw binary upload/upsert (`x-object-checksum-sha256` optional)
+- `GET /v1/storage/objects/*` — raw binary download
+- `HEAD /v1/storage/objects/*` — metadata (`ETag`, `x-object-checksum-sha256`, size)
+- `DELETE /v1/storage/objects/*` → `{ok, key}`
+- `GET /v1/storage/objects?prefix=&limit=&cursor=` → `{objects, nextCursor}`
+- `POST /v1/storage/presign {key, method?, expiresIn?}` → `{url}` (S3 backend; `501` on fs)
+- `POST /v1/storage/uploads {key, contentType}` → `{uploadId}`
+- `PUT /v1/storage/uploads/:id/parts/:n?key=...` — raw part body → `{partNumber, etag}`
+- `POST /v1/storage/uploads/:id/complete {key, parts}` → `{object}`
+- `DELETE /v1/storage/uploads/:id?key=...` → `{ok}`
+
+## Notifications (`notifications-service:4011`, gateway `/v1/notifications`)
+
+See `docs/notifications.md`.
+
+- `POST /v1/notifications {channels|channel, recipient, subject?, body, data?, idempotencyKey?}` → `202 {notifications}`
+- `GET /v1/notifications?status=&limit=` → `[notification]`
+- `GET /v1/notifications/:id` → status + attempt history
+- `POST /v1/notifications/:id/cancel` → cancelled notification (`409` when not cancellable)
+- `GET/PUT /v1/notifications/preferences/:recipient` → `{tenant, recipient, channels, unsubscribed}`
+- `POST /v1/notifications/unsubscribe {recipient}` → preference
 
 ## Usage analytics & request telemetry (`iam-service`, gateway `/v1/usage`)
 

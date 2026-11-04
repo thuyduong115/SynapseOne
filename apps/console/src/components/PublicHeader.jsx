@@ -15,6 +15,7 @@ const LINKS = [
   { to: '/', label: 'Home' },
   { to: '/api-docs', label: 'API Docs' },
   { to: '/docs', label: 'Docs' },
+  { to: '/about', label: 'About' },
 ];
 
 export default function PublicHeader() {

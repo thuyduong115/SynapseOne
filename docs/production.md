@@ -8,13 +8,21 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
       identical on gateway + IAM; production boot fails on defaults).
 - [ ] Same `SYNAPSEONE_INTERNAL_SECRET` on gateway + iam + workflow, then remove the
       `ports:` of IAM/workflow from host/internet (gateway only is public).
-- [ ] `IAM_ALLOW_DEV_LOGIN=false` (SSO + API keys only).
+- [ ] `IAM_ALLOW_DEV_LOGIN=false` (password login, SSO and API keys only â€” passwordless dev login is off).
 - [ ] `IAM_ALLOW_OIDC_DEMO_CALLBACK=false` (the demo callback accepts any caller-supplied email).
 - [ ] Random `IAM_API_KEY_PEPPER` (HMAC for at-rest key hashes).
 - [ ] `GATEWAY_VERIFY_APIKEY=true` when clients use API keys (centralized verification, fail-closed).
-- [ ] Authentik/Keycloak behind TLS; `OIDC_ISSUER` uses the correct internal https URL.
-- [ ] Point `OIDC_REDIRECT_URI` at the Console `/oidc/callback` page so the real
-      Authorization Code flow completes in the browser.
+- [ ] Authentik/Keycloak behind **public TLS**: `OIDC_ISSUER` must be a public
+      HTTPS URL a browser can reach (e.g. `https://auth.example.com/application/o/synapseone/`).
+      The old internal `http://authentik-server:9000` value is rejected at boot in
+      production, and discovery endpoints must be HTTPS on the issuer origin.
+- [ ] `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` set to the real IdP client
+      credentials (empty/`change_me` values abort boot).
+- [ ] If you prefer OIDC-only, disable `IAM_REGISTRATION_ENABLED`; otherwise password
+      lifecycle endpoints are available (`/v1/auth/register|login|password/*|email/verify`).
+- [ ] Point `OIDC_REDIRECT_URI` at the public Console `/oidc/callback` page
+      (public HTTPS host, not localhost/internal) so the real Authorization Code
+      flow completes in the browser.
 - [ ] Optional: pin federation with `OIDC_ALLOWED_ORGS` (comma-separated slugs).
       Without it a new slug is self-service; joining an **existing** org always
       requires a membership (invited via `POST /v1/orgs/:orgId/users`).
@@ -23,20 +31,31 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
 
 ## 2. Network & TLS
 
-- [ ] Gateway is the single entry point (Ingress + TLS); IAM/workflow/LDS/base/
-      faststore/queue/postgres/redis are not internet-exposed (ClusterIP / internal
-      compose network).
+- [ ] Gateway is the single entry point (Ingress + TLS); IAM/workflow/AI/LDS/base/
+      faststore/queue/stream/inference/storage/notifications/postgres/redis are not
+      internet-exposed (ClusterIP / internal compose network).
 - [ ] Lock down the gateway CORS to the real frontend origins (MVP default is wide open).
 - [ ] Rate limiting at the outer layer (Ingress NGINX `limit_req`, Cloudflare/AWS WAF):
       the gateway's built-in limiter was removed â€” outer rate limiting is mandatory, especially
       `/v1/auth/*` (brute-force login/refresh). Never expose IAM/workflow directly.
 - [ ] `PROXY_TIMEOUT_MS` per upstream SLA (default 30s).
+- [ ] `TRUST_PROXY=1` (one nginx/Ingress hop) or a CIDR list, so per-client
+      rate limits use `X-Forwarded-For` rather than the edge container IP.
+      `TRUST_PROXY=true` is rejected (spoofable). The edge must strip inbound XFF.
+- [ ] `INFERENCE_RATE_LIMIT_PER_MIN` sets the per-tenant AI quota (default 60,
+      returns `429` + `Retry-After`).
 - [ ] `HSTS_ENABLED=true` once TLS exists; `CORS_ORIGIN` set to the real frontend origins.
 
 ## 3. Data
 
 - [ ] Postgres: durable volume + periodic backups (`pg_dump`, see `docs/troubleshooting.md`).
-- [ ] Object storage: S3Mock â†’ MinIO/real S3 (`docs/object-storage.md`).
+- [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials and
+      replace S3Mock with MinIO/real S3 (`docs/object-storage.md`). Set
+      `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.
+- [ ] Notifications: set `DATABASE_URL`, `NOTIFICATIONS_QUEUE_URL`,
+      `NOTIFICATIONS_EMAIL_RELAY_URL`/`_SMS_`/`_PUSH_` as needed; the service
+      refuses to boot without the DB, internal secret and CORS origin
+      (`docs/notifications.md`).
 - [ ] Redis AOF already on in compose; on K8s use a redis chart with persistence.
 - [ ] Database schema is managed by Drizzle migrations in `apps/*/drizzle/`.
       Services apply their own migrations at startup under a per-service
@@ -54,6 +73,9 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
 
 ## 4. Operations
 
+- [ ] Stream/inference/storage/notifications are included in
+      `docker-compose.prod.yml` and `infra/k8s/base/all.yaml`, and `/ready` probes
+      them when their URLs are configured.
 - [ ] `restart: unless-stopped` is already set for every long-lived compose service;
       K8s has liveness/readiness (see `infra/k8s/base/all.yaml`). Alert when `/ready` â†’ 503.
 - [ ] Pin image digests for releases (`synapseone/*:0.1.0` â†’ digest), never `latest` for external engines.

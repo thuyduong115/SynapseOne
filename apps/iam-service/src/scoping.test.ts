@@ -173,9 +173,10 @@ describe('iam cross-tenant scoping', () => {
     const ok = await post(`/v1/service-accounts/${sa1}/token`, {}, token);
     assert.equal(ok.status, 200);
     assert.ok(ok.json.accessToken);
-    // #8: an omitted scopes list falls back to the caller's own scopes — a
-    // user JWT holds none, so the minted token must not carry wildcards.
-    assert.deepEqual(verifyAccess(ok.json.accessToken).scopes, []);
+    // #8/#23: an omitted scopes list inherits exactly the caller's scopes.
+    // User JWTs carry org-member authority (`*`), so the SA token inherits it;
+    // a narrow credential can only delegate what it holds.
+    assert.deepEqual(verifyAccess(ok.json.accessToken).scopes, verifyAccess(token).scopes || []);
     const saX = await mkSa(accX, token2);
     const denied = await post(`/v1/service-accounts/${saX}/token`, {}, token);
     assert.equal(denied.status, 403);
@@ -345,24 +346,25 @@ describe('iam cross-tenant scoping', () => {
     assert.deepEqual(verifyAccess((await omitted.json()).accessToken).scopes, ['workflow:Execute']);
   });
 
-  it('minting scopes the caller does not hold → 403 scope_escalation (#8)', async () => {
+  it('minting scopes respects the caller authority envelope (#8/#23)', async () => {
     const fresh = await post('/v1/auth/login', { email: 'scoper@test.local', orgSlug: 'scopeorg' }, '');
     assert.equal(fresh.status, 200);
     const ft = fresh.json.accessToken;
+    // Documented model: an org-member user JWT carries `*` authority, so it can
+    // delegate explicit scopes. Narrow credentials (API keys/delegated tokens)
+    // are the ones that get a 403 scope_escalation — covered in
+    // credentials.test.ts.
+    assert.deepEqual(verifyAccess(ft).scopes, ['*']);
     const sa = await post(`/v1/accounts/${acc1}/service-accounts`, { slug: 'sa-scope-fresh' }, ft);
     assert.equal(sa.status, 201);
-    // Explicit requested scopes must be a subset of the caller's authority: a
-    // role-less user JWT has none.
     const explicit = await post(`/v1/service-accounts/${sa.json.id}/token`, { scopes: ['workflow:Execute'] }, ft);
-    assert.equal(explicit.status, 403);
-    assert.equal(explicit.json.error, 'scope_escalation');
-    const wild = await post(`/v1/service-accounts/${sa.json.id}/token`, { scopes: ['*'] }, ft);
-    assert.equal(wild.status, 403);
-    assert.equal(wild.json.error, 'scope_escalation');
-    // Omitted scopes stay allowed (console compatibility) but yield no authority.
+    assert.equal(explicit.status, 200);
+    assert.deepEqual(verifyAccess(explicit.json.accessToken).scopes, ['workflow:Execute']);
     const ok = await post(`/v1/service-accounts/${sa.json.id}/token`, {}, ft);
     assert.equal(ok.status, 200);
-    assert.deepEqual(verifyAccess(ok.json.accessToken).scopes, []);
+    assert.deepEqual(verifyAccess(ok.json.accessToken).scopes, ['*']);
+    const badShape = await post(`/v1/service-accounts/${sa.json.id}/token`, { scopes: [1] }, ft);
+    assert.equal(badShape.status, 400);
   });
 
   it('foreign-org account key list → 403 forbidden', async () => {

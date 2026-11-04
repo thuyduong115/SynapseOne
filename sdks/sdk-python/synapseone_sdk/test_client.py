@@ -134,12 +134,16 @@ def test_import():
     import os
 
     orig = os.environ.pop("SYNAPSEONE_BASE_URL", None)
+    orig_legacy = os.environ.pop("SYNAPSEDX_BASE_URL", None)
     try:
         c_def = SynapseOneClient()
-        assert c_def.base_url == "https://synapseone.space"
+        # The console host is NOT the API: the default must be the gateway.
+        assert c_def.base_url == "https://api.synapseone.space"
     finally:
         if orig is not None:
             os.environ["SYNAPSEONE_BASE_URL"] = orig
+        if orig_legacy is not None:
+            os.environ["SYNAPSEDX_BASE_URL"] = orig_legacy
 
 
 def test_synapsedx_aliases():
@@ -505,5 +509,41 @@ def test_lds_http_error_mapping():
             assert "500" in str(e) and "boom" in str(e), e
             return
         raise AssertionError("expected SynapseOneError")
+    finally:
+        srv.shutdown()
+
+
+def test_credential_lifecycle_and_delegated_exchange_paths():
+    srv = _server()
+    try:
+        base = f"http://127.0.0.1:{srv.server_port}"
+        c = SynapseOneClient(base)
+        c.iam.register("new@example.com", "correct horse battery", "acme", "New User")
+        assert _seen["path"] == "/v1/auth/register"
+        assert json.loads(_seen["body"])["password"] == "correct horse battery"
+        c.iam.login_with_password("new@example.com", "correct horse battery", "acme")
+        assert _seen["path"] == "/v1/auth/login"
+        c.iam.change_password("old password", "new password 123")
+        assert _seen["path"] == "/v1/auth/password/change"
+        c.iam.request_password_reset("new@example.com", "acme")
+        assert _seen["path"] == "/v1/auth/password/forgot"
+        c.iam.reset_password("tok", "new password 123")
+        assert _seen["path"] == "/v1/auth/password/reset"
+        c.iam.verify_email("tok")
+        assert _seen["path"] == "/v1/auth/email/verify"
+        c.iam.request_email_verification()
+        assert _seen["path"] == "/v1/auth/email/verify/request"
+        c.iam.list_sessions()
+        assert _seen["path"] == "/v1/auth/sessions"
+        c.iam.revoke_session("s1")
+        assert _seen["path"] == "/v1/auth/sessions/s1"
+        c.iam.exchange_token("u1", account_id="a1", scopes=["faststore:get"], audience="dx", ttl_seconds=300)
+        assert _seen["path"] == "/v1/auth/exchange"
+        body = json.loads(_seen["body"])
+        assert body["userId"] == "u1"
+        assert body["scopes"] == ["faststore:get"]
+        assert body["ttlSeconds"] == 300
+        c.iam.create_api_key("a1")
+        assert json.loads(_seen["body"])["scopes"] == ["*:read"]
     finally:
         srv.shutdown()

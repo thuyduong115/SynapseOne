@@ -7,8 +7,9 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Server } from 'node:http';
-import { findRoute, expandEnv, propagatePrincipal, compileRoutePath, RouteRule, createApp, verifyApiKeyUpstream } from './index';
+import { findRoute, expandEnv, propagatePrincipal, compileRoutePath, parseTrustProxy, RouteRule, createApp, verifyApiKeyUpstream } from './index';
 import { featureForRoute, isUsageExcluded, isUsageTelemetryEnabled } from './usage';
+import { scopeAllows } from './scopes';
 
 // No analytics side effects while booting ephemeral test apps.
 process.env.USAGE_TELEMETRY = 'false';
@@ -120,9 +121,10 @@ describe('propagatePrincipal', () => {
     propagatePrincipal(req);
     assert.equal(req.headers['x-synapseone-kind'], 'apikey');
   });
-  it('writes verified apikey account+scopes', () => {
-    const req: any = { headers: {}, principal: { type: 'apikey', account: 'a1', scopes: ['x', 'y'] } };
+  it('writes verified apikey org+account+scopes', () => {
+    const req: any = { headers: {}, principal: { type: 'apikey', org: 'o1', account: 'a1', scopes: ['x', 'y'] } };
     propagatePrincipal(req);
+    assert.equal(req.headers['x-synapseone-org'], 'o1');
     assert.equal(req.headers['x-synapseone-account'], 'a1');
     assert.equal(req.headers['x-synapseone-scopes'], 'x,y');
   });
@@ -221,7 +223,7 @@ describe('verifyApiKeyUpstream', () => {  it('forwards the internal secret so IA
       req.on('data', (c) => (body += c));
       req.on('end', () => {
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ valid: true, account_id: 'a1', scopes: ['*'] }));
+        res.end(JSON.stringify({ valid: true, account_id: 'a1', org_id: 'o1', scopes: ['*'] }));
       });
     });
     await new Promise<void>((resolve) => iam.listen(0, '127.0.0.1', resolve));
@@ -229,7 +231,7 @@ describe('verifyApiKeyUpstream', () => {  it('forwards the internal secret so IA
       const addr = iam.address();
       const iamBase = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
       const out = await verifyApiKeyUpstream('k', iamBase, 's3cret');
-      assert.deepEqual(out, { account_id: 'a1', scopes: ['*'] });
+      assert.deepEqual(out, { account_id: 'a1', org_id: 'o1', scopes: ['*'] });
       assert.equal(seenInternal, 's3cret');
       const out2 = await verifyApiKeyUpstream('k', iamBase, undefined);
       assert.ok(out2);
@@ -255,6 +257,50 @@ describe('verifyApiKeyUpstream', () => {  it('forwards the internal secret so IA
   });
 });
 
+describe('trust proxy and per-client rate limits (#41)', () => {
+  it('rejects a blanket TRUST_PROXY=true', () => {
+    assert.throws(() => parseTrustProxy('true'), /forbidden/);
+    assert.equal(parseTrustProxy(undefined), false);
+    assert.equal(parseTrustProxy('0'), false);
+    assert.equal(parseTrustProxy('1'), 1);
+    assert.equal(parseTrustProxy('loopback,172.16.0.0/12'), 'loopback,172.16.0.0/12');
+  });
+
+  it('keys rate-limit buckets per client behind the edge and ignores spoofed hops', async () => {
+    const prev = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = '1';
+    process.env.IAM_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.WORKFLOW_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.AI_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.LDS_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.BASE_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.FASTSTORE_SERVICE_URL = 'http://127.0.0.1:1';
+    process.env.QUEUE_SERVICE_URL = 'http://127.0.0.1:1';
+    const app = createApp();
+    const server = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const addr = server.address();
+    const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    try {
+      const hit = (xff: string) => fetch(`${base}/ready`, { headers: { 'x-forwarded-for': xff } });
+      // Client A exhausts its own bucket.
+      let lastA = 0;
+      for (let i = 0; i < 31; i++) lastA = (await hit('203.0.113.10')).status;
+      assert.equal(lastA, 429);
+      // Client B is unaffected.
+      assert.notEqual((await hit('203.0.113.20')).status, 429);
+      // A spoofed left-most entry appends to the real client at the trusted hop
+      // (nginx appends), so it cannot poison client B's bucket.
+      assert.notEqual((await hit('198.51.100.99, 203.0.113.20')).status, 429);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (prev === undefined) delete process.env.TRUST_PROXY;
+      else process.env.TRUST_PROXY = prev;
+    }
+  });
+});
+
 describe('routes.yaml validation', () => {
   it('createApp fails fast on unknown auth mode', async () => {
     const fs = await import('node:fs');
@@ -270,6 +316,127 @@ describe('routes.yaml validation', () => {
       if (prev === undefined) delete process.env.GATEWAY_ROUTES_PATH;
       else process.env.GATEWAY_ROUTES_PATH = prev;
       fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
+    }
+  });
+});
+
+describe('per-route scope enforcement (#23)', () => {
+  it('maps routes/methods to service scopes', () => {
+    assert.equal(scopeAllows(['*'], '/v1/faststore/keys/a', 'POST'), true);
+    assert.equal(scopeAllows(['*:read'], '/v1/faststore/keys/a', 'GET'), true);
+    assert.equal(scopeAllows(['*:read'], '/v1/faststore/keys/a', 'PUT'), false);
+    assert.equal(scopeAllows(['faststore:get'], '/v1/faststore/keys/a', 'GET'), true);
+    assert.equal(scopeAllows(['faststore:get'], '/v1/faststore/keys/a', 'PUT'), false);
+    assert.equal(scopeAllows(['faststore:*'], '/v1/faststore/keys/a', 'PUT'), true);
+    assert.equal(scopeAllows(['faststore:write'], '/v1/faststore/keys/a', 'POST'), true);
+    assert.equal(scopeAllows(['base:read'], '/v1/faststore/keys/a', 'GET'), false);
+    assert.equal(scopeAllows(['workflow:execute'], '/v1/workflows/w1/execute', 'POST'), true);
+    assert.equal(scopeAllows(['iam:write'], '/v1/orgs/o1/accounts', 'POST'), true);
+    assert.equal(scopeAllows(['iam:read'], '/v1/orgs/o1/accounts', 'POST'), false);
+    // Public/auth routes are not scope-gated.
+    assert.equal(scopeAllows([], '/v1/auth/login', 'POST'), true);
+    assert.equal(scopeAllows([], '/health', 'GET'), true);
+  });
+
+  it('returns 403 scope_denied for a read-only API key on a write route', async () => {
+    const http = await import('node:http');
+    const iam = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/v1/keys/verify') {
+        res.end(JSON.stringify({ valid: true, account_id: 'a1', org_id: 'o1', scopes: ['faststore:get'] }));
+        return;
+      }
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const upstream = http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, upstream: true }));
+    });
+    await new Promise<void>((resolve) => iam.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const port = (s: any) => (typeof s.address() === 'object' ? s.address().port : 0);
+    const prev = {
+      IAM_SERVICE_URL: process.env.IAM_SERVICE_URL,
+      FASTSTORE_SERVICE_URL: process.env.FASTSTORE_SERVICE_URL,
+    };
+    process.env.IAM_SERVICE_URL = `http://127.0.0.1:${port(iam)}`;
+    process.env.FASTSTORE_SERVICE_URL = `http://127.0.0.1:${port(upstream)}`;
+    const app = createApp();
+    const gw = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const base = `http://127.0.0.1:${port(gw)}`;
+    try {
+      const read = await fetch(`${base}/v1/faststore/keys/a`, { headers: { 'X-API-Key': 'k' } });
+      assert.equal(read.status, 200);
+      const write = await fetch(`${base}/v1/faststore/keys/a`, { method: 'PUT', headers: { 'X-API-Key': 'k', 'Content-Type': 'application/json' }, body: '{}' });
+      assert.equal(write.status, 403);
+      const denied = await write.json();
+      assert.equal(denied.error, 'scope_denied');
+    } finally {
+      await new Promise<void>((resolve) => gw.close(() => resolve()));
+      await new Promise<void>((resolve) => iam.close(() => resolve()));
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
+
+describe('inference quota (#26)', () => {
+  it('returns 429 + Retry-After after the per-tenant budget', async () => {
+    const http = await import('node:http');
+    const iam = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/v1/keys/verify') {
+        res.end(JSON.stringify({ valid: true, account_id: 'a1', org_id: 'o1', scopes: ['*'] }));
+        return;
+      }
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const upstream = http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => iam.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const port = (s: any) => (typeof s.address() === 'object' ? s.address().port : 0);
+    const prev = {
+      IAM_SERVICE_URL: process.env.IAM_SERVICE_URL,
+      INFERENCE_SERVICE_URL: process.env.INFERENCE_SERVICE_URL,
+      INFERENCE_RATE_LIMIT_PER_MIN: process.env.INFERENCE_RATE_LIMIT_PER_MIN,
+    };
+    process.env.IAM_SERVICE_URL = `http://127.0.0.1:${port(iam)}`;
+    process.env.INFERENCE_SERVICE_URL = `http://127.0.0.1:${port(upstream)}`;
+    process.env.INFERENCE_RATE_LIMIT_PER_MIN = '2';
+    const app = createApp();
+    const gw = await new Promise<Server>((resolve) => {
+      const s = app.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    const base = `http://127.0.0.1:${port(gw)}`;
+    try {
+      const hit = () => fetch(`${base}/v1/inference/chat/completions`, {
+        method: 'POST',
+        headers: { 'X-API-Key': 'k', 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal((await hit()).status, 200);
+      assert.equal((await hit()).status, 200);
+      const limited = await hit();
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.headers.get('retry-after')) >= 1);
+      const body = await limited.json();
+      assert.equal(body.error, 'quota_exceeded');
+    } finally {
+      await new Promise<void>((resolve) => gw.close(() => resolve()));
+      await new Promise<void>((resolve) => iam.close(() => resolve()));
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 });

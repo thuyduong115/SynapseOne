@@ -44,6 +44,9 @@ class Settings:
     HOST: str = _get_env_str(["INFERENCE_HOST", "HOST"], "0.0.0.0")
     ENVIRONMENT: str = _get_env_str(["NODE_ENV", "ENVIRONMENT", "ENV"], "development")
     SYNAPSEONE_INTERNAL_SECRET: str = _get_env_str(["SYNAPSEONE_INTERNAL_SECRET"], "")
+    IAM_SERVICE_URL: str = _get_env_str(["IAM_SERVICE_URL"], "http://iam:4001").rstrip("/")
+    # Token metering is best-effort; never block the request path.
+    USAGE_REPORTING: bool = _get_env_bool(["INFERENCE_USAGE_REPORTING"], True)
 
     # LLM (OpenRouter)
     OPENROUTER_BASE_URL: str = _get_env_str(
@@ -77,6 +80,14 @@ class Settings:
     # Device & Mocking
     INFERENCE_DEVICE: str = _get_env_str(["INFERENCE_DEVICE"], "auto")
     INFERENCE_MOCK_MODELS: bool = _get_env_bool(["INFERENCE_MOCK_MODELS"], False)
+
+    # CORS: comma-separated allowlist. Empty is the dev default (allow all);
+    # production refuses to boot without an explicit list.
+    CORS_ORIGIN: str = _get_env_str(["CORS_ORIGIN"], "")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGIN.split(",") if o.strip()]
 
     @property
     def is_production(self) -> bool:

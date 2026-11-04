@@ -8,25 +8,59 @@ package synapseone
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// DefaultBaseURL is the default public gateway URL (https://synapseone.space).
-const DefaultBaseURL = "https://synapseone.space"
+// DefaultBaseURL is the default public API gateway URL.
+const DefaultBaseURL = "https://api.synapseone.space"
 
-// Client talks to the SynapseOne gateway (defaults to https://synapseone.space).
+// DefaultTimeout matches the SDK-wide 15s default; long routes override it.
+const DefaultTimeout = 15 * time.Second
+
+// InferenceTimeout matches the gateway /v1/inference route budget.
+const InferenceTimeout = 120 * time.Second
+
+// WebhookTimeout matches the gateway /webhook route budget.
+const WebhookTimeout = 300 * time.Second
+
+// APIError is returned for non-2xx responses and for a 2xx HTML body (a base
+// URL pointing at the console/marketing host instead of the gateway).
+type APIError struct {
+	StatusCode int
+	Path       string
+	Body       string
+	Code       string
+}
+
+func (e *APIError) Error() string {
+	code := ""
+	if e.Code != "" {
+		code = " " + e.Code
+	}
+	return fmt.Sprintf("synapseone %d%s %s: %s", e.StatusCode, code, e.Path, truncate(e.Body, 500))
+}
+
+// Client talks to the SynapseOne gateway (defaults to DefaultBaseURL).
 type Client struct {
 	BaseURL string
 	Token   string // Bearer JWT (user or service-account token)
 	APIKey  string // X-API-Key
 	Tenant  string // x-synapseone-tenant (platform callers of faststore/queue)
 	HTTP    *http.Client
+	// MaxAttempts is the total number of tries for idempotent requests on
+	// 429/502/503/504 (default 3; 1 disables retries).
+	MaxAttempts int
+	// RetryBase is the exponential backoff base (default 200ms).
+	RetryBase time.Duration
 }
 
 // New creates a client with a 15s timeout. If baseURL is empty, it resolves
@@ -43,7 +77,7 @@ func NewDefault() *Client {
 // NewWithClient allows custom timeout / transport (tests, mTLS, tracing...).
 func NewWithClient(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{Timeout: DefaultTimeout}
 	}
 	if baseURL == "" {
 		baseURL = os.Getenv("SYNAPSEONE_BASE_URL")
@@ -54,7 +88,12 @@ func NewWithClient(baseURL string, httpClient *http.Client) *Client {
 			}
 		}
 	}
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: httpClient}
+	return &Client{
+		BaseURL:     strings.TrimRight(baseURL, "/"),
+		HTTP:        httpClient,
+		MaxAttempts: 3,
+		RetryBase:   200 * time.Millisecond,
+	}
 }
 
 // SetToken sets the Bearer JWT for subsequent calls.
@@ -68,19 +107,143 @@ func (c *Client) SetAPIKey(k string) { c.APIKey = k }
 func (c *Client) SetTenant(t string) { c.Tenant = t }
 
 func (c *Client) do(method, path string, body any) ([]byte, error) {
-	var r io.Reader
+	return c.doWithTimeout(method, path, body, 0)
+}
+
+// doWithTimeout sends a request with an optional per-call timeout override.
+func (c *Client) doWithTimeout(method, path string, body any, timeout time.Duration) ([]byte, error) {
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("synapseone encode %s: %w", path, err)
 		}
-		r = bytes.NewReader(b)
+		payload = b
 	}
-	req, err := http.NewRequest(method, c.BaseURL+path, r)
+	method = strings.ToUpper(method)
+	retryable := method == "GET" || method == "HEAD" || method == "OPTIONS" || method == "PUT" || method == "DELETE"
+	attempts := c.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	base := c.RetryBase
+	if base <= 0 {
+		base = 200 * time.Millisecond
+	}
+	var last error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var r io.Reader
+		if payload != nil {
+			r = bytes.NewReader(payload)
+		}
+		req, err := http.NewRequest(method, c.BaseURL+path, r)
+		if err != nil {
+			return nil, fmt.Errorf("synapseone request %s: %w", path, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Token)
+		}
+		if c.APIKey != "" {
+			req.Header.Set("X-API-Key", c.APIKey)
+		}
+		if c.Tenant != "" {
+			req.Header.Set("x-synapseone-tenant", c.Tenant)
+		}
+		var resp *http.Response
+		if timeout > 0 {
+			// Per-call timeout without mutating the shared client (safe for
+			// concurrent callers): a short-lived client shares the transport.
+			tmp := *c.HTTP
+			tmp.Timeout = timeout
+			resp, err = tmp.Do(req)
+		} else {
+			resp, err = c.HTTP.Do(req)
+		}
+		if err != nil {
+			last = fmt.Errorf("synapseone network %s: %w", path, err)
+			if retryable && attempt < attempts {
+				time.Sleep(backoff(base, attempt))
+				continue
+			}
+			return nil, last
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			apiErr := &APIError{StatusCode: resp.StatusCode, Path: path, Body: string(b)}
+			var parsed map[string]any
+			if json.Unmarshal(b, &parsed) == nil {
+				if s, ok := parsed["error"].(string); ok {
+					apiErr.Code = s
+				}
+			}
+			if retryable && isRetryableStatus(resp.StatusCode) && attempt < attempts {
+				time.Sleep(retryAfter(resp.Header.Get("Retry-After"), base, attempt))
+				last = apiErr
+				continue
+			}
+			return nil, apiErr
+		}
+		head := strings.ToLower(strings.TrimSpace(string(b)))
+		if strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html") {
+			// A 200 SPA/HTML response means the base URL is the console host.
+			return nil, &APIError{
+				StatusCode: resp.StatusCode,
+				Path:       path,
+				Body:       fmt.Sprintf("expected JSON from %s but received HTML; use %s", c.BaseURL, DefaultBaseURL),
+				Code:       "non_json_response",
+			}
+		}
+		return b, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("synapseone %s: retries exhausted", path)
+	}
+	return nil, last
+}
+
+func isRetryableStatus(status int) bool {
+	return status == 429 || status == 502 || status == 503 || status == 504
+}
+
+func backoff(base time.Duration, attempt int) time.Duration {
+	d := base * time.Duration(1<<uint(attempt-1))
+	return d + time.Duration(rand.Int63n(int64(base)+1))
+}
+
+func retryAfter(value string, base time.Duration, attempt int) time.Duration {
+	if value != "" {
+		if secs, err := strconv.ParseFloat(value, 64); err == nil && secs >= 0 {
+			d := time.Duration(secs * float64(time.Second))
+			if d > 30*time.Second {
+				d = 30 * time.Second
+			}
+			return d
+		}
+	}
+	return backoff(base, attempt)
+}
+
+// GetBytes fetches a raw binary body (object downloads, attachments).
+func (c *Client) GetBytes(path string) ([]byte, error) {
+	return c.doWithTimeout("GET", path, nil, 0)
+}
+
+// doRaw sends a raw binary body (no JSON encoding) and returns the response
+// bytes plus headers. Used by object storage uploads/downloads.
+func (c *Client) doRaw(method, path string, body []byte, contentType string, timeout time.Duration) ([]byte, http.Header, error) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(strings.ToUpper(method), c.BaseURL+path, r)
 	if err != nil {
-		return nil, fmt.Errorf("synapseone request %s: %w", path, err)
+		return nil, nil, fmt.Errorf("synapseone request %s: %w", path, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -90,16 +253,66 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 	if c.Tenant != "" {
 		req.Header.Set("x-synapseone-tenant", c.Tenant)
 	}
-	resp, err := c.HTTP.Do(req)
+	client := c.HTTP
+	if timeout > 0 {
+		tmp := *c.HTTP
+		tmp.Timeout = timeout
+		client = &tmp
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("synapseone network %s: %w", path, err)
+		return nil, nil, fmt.Errorf("synapseone network %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("synapseone %d %s: %s", resp.StatusCode, path, truncate(string(b), 500))
+		return nil, resp.Header, &APIError{StatusCode: resp.StatusCode, Path: path, Body: string(b)}
 	}
-	return b, nil
+	return b, resp.Header, nil
+}
+
+// Health returns the shallow gateway health payload.
+func (c *Client) Health() (map[string]any, error) {
+	b, err := c.doWithTimeout("GET", "/health", nil, DefaultTimeout)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Ready returns the aggregate readiness payload. A 503 ("degraded") is
+// returned as data, not an error, so Tier-2 can project the upstream list.
+// Use ReadyStrict for probe semantics that fail on degraded.
+func (c *Client) Ready() (map[string]any, error) {
+	return c.ready(false)
+}
+
+// ReadyStrict is Ready with throw-on-degraded semantics.
+func (c *Client) ReadyStrict() (map[string]any, error) {
+	return c.ready(true)
+}
+
+func (c *Client) ready(strict bool) (map[string]any, error) {
+	b, err := c.doWithTimeout("GET", "/ready", nil, DefaultTimeout)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == 503 && !strict {
+			var out map[string]any
+			if json.Unmarshal([]byte(apiErr.Body), &out) == nil {
+				return out, nil
+			}
+		}
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func unmarshal(b []byte, out any) error {
@@ -132,6 +345,157 @@ func (c *Client) Login(email, orgSlug string) (map[string]any, error) {
 		orgSlug = "acme"
 	}
 	b, err := c.do("POST", "/v1/auth/login", map[string]any{"email": email, "orgSlug": orgSlug})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Register creates a first-party account (email + password).
+func (c *Client) Register(email, password, orgSlug, displayName string) (map[string]any, error) {
+	if orgSlug == "" {
+		orgSlug = "acme"
+	}
+	body := map[string]any{"email": email, "password": password, "orgSlug": orgSlug}
+	if displayName != "" {
+		body["displayName"] = displayName
+	}
+	b, err := c.do("POST", "/v1/auth/register", body)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// LoginWithPassword signs in with a first-party email+password credential.
+func (c *Client) LoginWithPassword(email, password, orgSlug string) (map[string]any, error) {
+	if orgSlug == "" {
+		orgSlug = "acme"
+	}
+	b, err := c.do("POST", "/v1/auth/login", map[string]any{
+		"email": email, "password": password, "orgSlug": orgSlug,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ChangePassword rotates the current user's password and revokes other sessions.
+func (c *Client) ChangePassword(currentPassword, newPassword string) (map[string]any, error) {
+	b, err := c.do("POST", "/v1/auth/password/change", map[string]any{
+		"currentPassword": currentPassword, "newPassword": newPassword,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RequestPasswordReset asks for a single-use reset token (always 202).
+func (c *Client) RequestPasswordReset(email, orgSlug string) (map[string]any, error) {
+	if orgSlug == "" {
+		orgSlug = "acme"
+	}
+	b, err := c.do("POST", "/v1/auth/password/forgot", map[string]any{"email": email, "orgSlug": orgSlug})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ResetPassword consumes a single-use reset token.
+func (c *Client) ResetPassword(token, newPassword string) (map[string]any, error) {
+	b, err := c.do("POST", "/v1/auth/password/reset", map[string]any{"token": token, "newPassword": newPassword})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// VerifyEmail consumes an email verification token.
+func (c *Client) VerifyEmail(token string) (map[string]any, error) {
+	b, err := c.do("POST", "/v1/auth/email/verify", map[string]any{"token": token})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RequestEmailVerification re-issues a verification token for the current user.
+func (c *Client) RequestEmailVerification() (map[string]any, error) {
+	b, err := c.do("POST", "/v1/auth/email/verify/request", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSessions lists the current user's refresh-token sessions.
+func (c *Client) ListSessions() ([]any, error) {
+	b, err := c.do("GET", "/v1/auth/sessions", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []any
+	if err := unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RevokeSession revokes one refresh-token session by id.
+func (c *Client) RevokeSession(id string) error {
+	_, err := c.do("DELETE", "/v1/auth/sessions/"+pathEscape(id), nil)
+	return err
+}
+
+// ExchangeTokenInput describes a delegated token exchange (Tier 2 -> Tier 1).
+type ExchangeTokenInput struct {
+	UserID     string   `json:"userId"`
+	AccountID  string   `json:"accountId,omitempty"`
+	OrgID      string   `json:"orgId,omitempty"`
+	Scopes     []string `json:"scopes,omitempty"`
+	Audience   string   `json:"audience,omitempty"`
+	TTLSeconds int      `json:"ttlSeconds,omitempty"`
+}
+
+// ExchangeToken obtains a short-lived, user-bound delegated token. The client
+// must present a service-account Bearer token or an API key.
+func (c *Client) ExchangeToken(in ExchangeTokenInput) (map[string]any, error) {
+	b, err := c.do("POST", "/v1/auth/exchange", in)
 	if err != nil {
 		return nil, err
 	}
@@ -478,14 +842,43 @@ func (c *Client) Simulate(documents []any, action, resource string, context map[
 
 // ListAudit reads the audit log (limit clamped server-side to 1..200).
 func (c *Client) ListAudit(limit int, actor string) ([]any, error) {
+	return c.ListAuditFiltered(AuditFilter{Limit: limit, Actor: actor})
+}
+
+// AuditFilter narrows the tenant-scoped audit query (#32).
+type AuditFilter struct {
+	Limit    int
+	Offset   int
+	Actor    string
+	Action   string
+	Resource string
+	From     string
+	To       string
+	Allowed  *bool
+}
+
+// ListAuditFiltered reads the audit trail with action/resource/time filters.
+func (c *Client) ListAuditFiltered(f AuditFilter) ([]any, error) {
+	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	q := fmt.Sprintf("?limit=%d", limit)
-	if actor != "" {
-		q += "&actor=" + url.QueryEscape(actor)
+	v := url.Values{}
+	v.Set("limit", strconv.Itoa(limit))
+	if f.Offset > 0 {
+		v.Set("offset", strconv.Itoa(f.Offset))
 	}
-	b, err := c.do("GET", "/v1/audit"+q, nil)
+	for k, val := range map[string]string{
+		"actor": f.Actor, "action": f.Action, "resource": f.Resource, "from": f.From, "to": f.To,
+	} {
+		if val != "" {
+			v.Set(k, val)
+		}
+	}
+	if f.Allowed != nil {
+		v.Set("allowed", strconv.FormatBool(*f.Allowed))
+	}
+	b, err := c.do("GET", "/v1/audit?"+v.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +896,8 @@ func (c *Client) CreateAPIKey(accountID, name string, scopes []string) (map[stri
 		name = "default"
 	}
 	if len(scopes) == 0 {
-		scopes = []string{"*"}
+		// Least privilege: callers must ask for "*" explicitly.
+		scopes = []string{"*:read"}
 	}
 	b, err := c.do("POST", "/v1/accounts/"+pathEscape(accountID)+"/keys", map[string]any{"name": name, "scopes": scopes})
 	if err != nil {
@@ -1160,9 +1554,9 @@ func (c *Client) GetExecutionWithData(id string, includeData bool) (map[string]a
 // TriggerWebhook fires a public inbound webhook: ANY /webhook/:path (no auth).
 // It triggers the ACTIVE workflow whose webhook node declares that path.
 //
-// NOTE: the gateway does not proxy /webhook/* — pass the workflow-service
-// origin (e.g. http://localhost:4002), not the gateway URL. No auth headers
-// are sent even if the client has a token configured.
+// The gateway proxies /webhook/* to the workflow service; the 300s gateway
+// budget is the default timeout. No auth headers are sent even if the client
+// has a token configured.
 func TriggerWebhook(webhookBaseURL, path string, payload any) (map[string]any, error) {
 	return TriggerWebhookWithMethod(webhookBaseURL, path, payload, "")
 }
@@ -1198,7 +1592,7 @@ func TriggerWebhookWithMethod(webhookBaseURL, path string, payload any, method s
 	if r != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient := &http.Client{Timeout: WebhookTimeout}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("synapseone network /webhook/%s: %w", clean, err)

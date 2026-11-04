@@ -17,6 +17,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
+import { auditMiddleware } from './audit';
 import {
   FaststoreError, useRedis, initStore, closeStore,
   setValue, getValue, deleteKey, expireKey, ttlKey, incrValue, scanKeys, tenantStats,
@@ -279,6 +280,8 @@ export function createApp(): express.Express {
     next();
   }) as any);
   app.use(express.json({ limit: '2mb' }));
+  // Data-plane mutation audit (#32): actor/tenant/action/result per write.
+  app.use(auditMiddleware('faststore'));
 
   // ---- Prometheus metrics (bounded cardinality) ----
   const METRIC_REQUESTS: Map<string, number> = new Map();

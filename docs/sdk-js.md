@@ -22,7 +22,7 @@ pnpm add @synapseone/sdk
 ```ts
 import { SynapseOneClient } from '@synapseone/sdk';
 
-const c = new SynapseOneClient(); // defaults to https://synapseone.space
+const c = new SynapseOneClient(); // defaults to https://api.synapseone.space
 
 // Login (dev login or seed)
 const { accessToken, user } = await c.iam.login('demo@acme.local');
@@ -34,6 +34,16 @@ await c.iam.authorize(user.id, 'workflow:Execute', '*');
 await c.workflow.createWorkflowFromTemplate('webhook-to-log', 'demo');
 ```
 
+## Subpath imports (all resolve from a clean install)
+
+```ts
+import { SynapseOneClient } from '@synapseone/sdk';
+import { StorageService } from '@synapseone/sdk/storage';
+import { NotificationsService } from '@synapseone/sdk/notifications';
+import { InferenceService, parseChatDelta } from '@synapseone/sdk/inference';
+// also: ./iam ./workflow ./ai ./lds ./base ./faststore ./queue ./stream ./health
+```
+
 ## Constructor
 
 ```ts
@@ -42,11 +52,13 @@ new SynapseOneClient(opts?: SynapseOneClientOptions)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `baseUrl` | `string` | `'https://synapseone.space'` | Gateway URL, or `$SYNAPSEONE_BASE_URL` |
+| `baseUrl` | `string` | `'https://api.synapseone.space'` | API gateway URL, or `$SYNAPSEONE_BASE_URL` |
 | `token` | `string` | — | Bearer JWT (from login or service account) |
 | `apiKey` | `string` | — | API key sent as `X-API-Key` header |
 | `tenant` | `string` | — | `x-synapseone-tenant`; platform callers only (Faststore/Queue) |
-| `timeoutMs` | `number` | `15000` | Per-request timeout in milliseconds |
+| `timeoutMs` | `number` | `15000` | Default per-request timeout (inference/webhook have longer namespace defaults) |
+| `maxAttempts` | `number` | `3` | Retries for idempotent requests on 429/502/503/504 (1 = no retry) |
+| `retryBaseMs` | `number` | `200` | Exponential backoff base + jitter; `Retry-After` wins |
 
 ### Auth methods
 
@@ -799,3 +811,52 @@ async function main() {
 
 main().catch(console.error);
 ```
+
+
+## Namespaces added in 0.7.x
+
+| Namespace | Highlights |
+|---|---|
+| `c.iam` | register/loginWithPassword/changePassword/requestPasswordReset/resetPassword/verifyEmail/sessions, `exchangeToken` (Tier-2 delegated identity), audit filters, scoped keys |
+| `c.storage` | `putObject/getObject/headObject/deleteObject/listObjects/presign`, multipart (`createMultipart/uploadPart/completeMultipart/abortMultipart`) |
+| `c.notifications` | `send/get/list/cancel`, `getPreference/setPreference/unsubscribe` |
+| `c.inference` | `chatStream` (SSE async iterator), `parseChatDelta`, 120s default timeout |
+| `c.health` / `c.readiness` | typed `health()`, `ready()` (returns degraded payload instead of throwing), `status()` |
+| `c.stream` | topics/consumer groups (already shipped) |
+
+## Streaming inference
+
+```ts
+const ctl = new AbortController();
+for await (const ev of c.inference.chatStream([{ role: 'user', content: 'hello' }], {}, { signal: ctl.signal })) {
+  const delta = parseChatDelta(ev.data);
+  if (delta) process.stdout.write(delta);
+}
+```
+
+## Transport behaviour
+
+- Per-call overrides: `c.http.req(path, init, { timeoutMs, signal, maxAttempts, retryable })`.
+- Idempotent methods retry on `429/502/503/504` with exponential backoff + jitter and
+  honour `Retry-After`; POSTs do not retry unless `retryable: true`.
+- A 2xx `text/html` response raises `SynapseOneError` with `code: 'non_json_response'`
+  and the base URL — this catches the console-host-vs-API mistake.
+- Binary helpers: `reqBinary` (download), `upload` (raw PUT/POST), `head` (metadata).
+- `workflow.triggerWebhook` uses the gateway's 300s budget; inference uses 120s.
+
+## Parity matrix
+
+| Capability | JS | Python | Go |
+|---|---|---|---|
+| IAM auth/orgs/roles/policies/keys/SA | yes | yes | yes |
+| Password lifecycle + sessions | yes | yes | yes |
+| Delegated `exchangeToken` | yes | yes | yes |
+| Usage analytics (`usageSummary`/`usageEvents`) | yes | yes* | yes* |
+| Workflow + credentials + webhook | yes | yes | yes |
+| LDS / Base / Faststore / Queue / Stream | yes | yes | yes |
+| Object storage (binary + multipart) | yes | yes | yes |
+| Notifications | yes | yes | yes |
+| Inference streaming | yes | yes | yes |
+| Typed health/ready | yes | yes | yes |
+
+\* Python/Go expose the same routes; the typed summary envelope is untyped `dict`/`map`.

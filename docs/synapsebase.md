@@ -288,6 +288,11 @@ addressable with `$id`, `$version`, `$createdAt`, `$updatedAt`.
 | `gt` / `gte` / `lt` / `lte` | number/string/boolean comparison; incomparable → no match |
 | `in` / `nin` | value is / is not in a non-empty array (≤ 1000 items) |
 | `contains` | substring for strings, membership for arrays |
+| `text` | Postgres full-text match (simple dictionary) over one field; all query terms must match |
+| `$text` field | document-wide full-text match over every string value (uses the FTS GIN index) |
+| `near` | `{lat,lng,maxDistanceKm?}` radius search over a geo point field |
+| `within` | GeoJSON Polygon `{type:"Polygon",coordinates}` (≤500 vertices) or `{bbox:[minLng,minLat,maxLng,maxLat]}` |
+| `$id` / `$version` / `$createdAt` / `$updatedAt` | document metadata |
 | `startsWith` / `endsWith` | string prefix/suffix |
 | `exists` | `true`/`false` based on presence (including `null`) |
 
@@ -299,9 +304,22 @@ addressable with `$id`, `$version`, `$createdAt`, `$updatedAt`.
   not both. `offset` is 0..10,000,000; `limit` is 1..1000 (default 100).
 - `select` accepts up to 100 logical names/dot paths and projects the `data`
   before the object conversion.
-- The service scans at most `BASE_QUERY_SCAN_LIMIT` documents
-  (default **10,000**) per query. A larger collection returns
-  `413 collection_too_large` — narrow the collection or raise the limit.
+- **Postgres executes the query** (`#29`): filters, `ORDER BY`, `LIMIT/OFFSET`
+  and `COUNT(*)` are compiled to parameterised SQL; only the requested page is
+  returned to the API process. Equality filters compile to `data @> $n::jsonb`
+  and use the `idx_base_documents_data` GIN index; `$text` uses the
+  `idx_base_documents_fts` GIN index (migration `0004_query_indexes`); default
+  id order uses the primary key. Range and geo predicates are pushed down but
+  are not index-accelerated without PostGIS.
+- The in-memory dev/test fallback keeps the scan engine and is still bounded by
+  `BASE_QUERY_SCAN_LIMIT` (batched, default **200,000**). Only that fallback can
+  return `413 collection_too_large`; a Postgres-backed deployment does not.
+- Cursors are offset cursors. Pages are stable for a static collection; a
+  concurrent insert/delete before the offset can shift later pages, so long
+  exports should re-query by `$updatedAt`/`$id` for a consistent snapshot.
+- `GET /documents?limit=&offset=` fetches only the requested page in Postgres.
+  Add `withTotal=1` for an `{items,total,limit,offset,nextCursor}` envelope;
+  `X-Total-Count` is always set and the default response stays a bare array.
 
 Response:
 
@@ -323,7 +341,13 @@ Response:
 
 ## Vector Search (SynapseBase Vector)
 
-SynapseBase features native vector similarity search powered by **PostgreSQL `pgvector`** (with in-memory fallback for offline dev/tests). Collections can declare embedding vector fields and perform semantic similarity searches combined with standard metadata filters (Hybrid Search).
+SynapseBase supports vector similarity search over embedding fields with
+metadata filters (hybrid search). **Implementation note (`#29`):** ranking is
+currently computed in the service over the filtered documents; the `pgvector`
+extension/table exists but an ANN index is not used yet. Metadata `where`
+filters are evaluated server-side for `/query`, but vector scoring still reads
+candidate documents. For large vector collections, narrow candidates with
+indexed equality filters (or an external vector index) until ANN pushdown ships.
 
 ### Declaring vector fields in a mapping
 
@@ -572,7 +596,7 @@ All errors use `{error, message}`; mapping errors may add `details`.
 | Nesting depth | 32 |
 | Array length | 10,000 items |
 | Mapping | 100 fields, 16 path segments, 64-char names/segments |
-| Query scan | `BASE_QUERY_SCAN_LIMIT`, default 10,000, clamped 100..100,000 |
+| Query scan (memory fallback only) | `BASE_QUERY_SCAN_LIMIT`, default 200,000, clamped 100..1,000,000; Postgres queries are not scanned |
 | Filters per query | 50 |
 | Filter nesting | 8 |
 | `orderBy` | 3 fields |

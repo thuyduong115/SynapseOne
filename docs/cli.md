@@ -36,7 +36,7 @@ npm link ./tools/cli
 ## Quick start
 
 ```bash
-# Defaults to https://synapseone.space (or pass --base http://localhost:8080 for local dev)
+# Defaults to https://api.synapseone.space (or pass --base http://localhost:8080 for local dev)
 synapseone login --email demo@acme.local
 synapseone orgs
 synapseone accounts create prod Production
@@ -56,7 +56,7 @@ The CLI resolves the base URL in this order (first match wins):
 1. `--base <URL>` flag
 2. `$SYNAPSEONE_BASE_URL` environment variable
 3. `baseUrl` in `~/.synapseone/config.json`
-4. `https://synapseone.space` (default)
+4. `https://api.synapseone.space` (default — the API gateway, not the console host)
 
 ### Auth resolution
 
@@ -164,6 +164,17 @@ Saves an API key to config (instead of a token).
 ```bash
 synapseone use-key sk_live_abc123...
 ```
+
+#### `health`
+
+```bash
+synapseone health            # GET /health
+synapseone health --ready    # GET /ready: per-upstream table; exit 3 when degraded
+synapseone health --ready --json
+```
+
+A 2xx HTML response (wrong `--base`, e.g. the console host) is rejected with a
+clear error instead of printing the SPA.
 
 #### `whoami`
 ```bash

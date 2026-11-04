@@ -14,6 +14,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { timingSafeEqual, randomUUID } from 'crypto';
+import { auditMiddleware } from './audit';
 import { AsyncLocalStorage } from 'async_hooks';
 import {
   createWorkflowRec, getWorkflowRec, listWorkflowRecs, updateWorkflowRec, deleteWorkflowRec,
@@ -1102,6 +1103,8 @@ export function createApp(): express.Express {
     // Keep the raw body for HMAC webhook verification (P0-5).
     verify: (req: any, _res, buf) => { req.rawBody = buf; },
   }));
+  // Data-plane mutation audit (#32): actor/tenant/action/result per write.
+  app.use(auditMiddleware('workflow'));
 
   // ---- inbound webhook hardening (P0-5): per-workflow auth, rate limit, idempotency ----
   // Node params contract (validated at save time):

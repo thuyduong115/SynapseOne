@@ -15,7 +15,8 @@ import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { BaseMapping, cloneJson, deepMerge, getPath, setPath } from './mapping';
 import { baseCollections, baseDocuments, baseVectors } from './schema';
-import { VectorSearchSpec, VectorSearchResult, applyVectorSearch } from './query';
+import { QuerySpec, QueryResult, VectorSearchSpec, VectorSearchResult, applyVectorSearch, formatQueryPage } from './query';
+import { compileQuery } from './pg-query';
 
 export interface StoredCollection {
   id: string;
@@ -90,6 +91,15 @@ export function useDb(): boolean {
   return !!db;
 }
 
+/** Run one parameterised statement against the configured Postgres pool.
+ *  Only the query compiler builds SQL; every caller value is a bind param. */
+export async function pgQuery<T = any>(text: string, params: unknown[] = []): Promise<T[]> {
+  if (!pool) throw new Error('[base] DATABASE_URL is not configured');
+  await ensureTables();
+  const res = await pool.query(text, params as any[]);
+  return res.rows as T[];
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -121,6 +131,18 @@ function rowToDocument(r: typeof baseDocuments.$inferSelect): StoredDocument {
     version: Number(r.version) || 1,
     created_at: iso(r.createdAt),
     updated_at: iso(r.updatedAt),
+  };
+}
+
+/** Map a raw `pg` row (snake_case columns) to a StoredDocument. */
+function pgRowToDocument(r: any): StoredDocument {
+  return {
+    collection_id: String(r.collection_id ?? r.collectionId ?? ''),
+    id: String(r.id),
+    data: r.data && typeof r.data === 'object' && !Array.isArray(r.data) ? r.data : {},
+    version: Number(r.version) || 1,
+    created_at: iso(r.created_at ?? r.createdAt),
+    updated_at: iso(r.updated_at ?? r.updatedAt),
   };
 }
 
@@ -336,16 +358,15 @@ export async function getDocumentRec(collectionId: string, id: string): Promise<
 /** List documents (optionally changed after `since`) for the in-service query engine. */
 export async function listDocumentRecs(
   collectionId: string,
-  opts: { since?: string; scanLimit?: number } = {},
+  opts: { since?: string; scanLimit?: number; afterId?: string } = {},
 ): Promise<StoredDocument[]> {
   const limit = Math.min(Math.max(Number(opts.scanLimit) || 10001, 1), 50001);
   if (db) {
     await ensureTables();
-    const base = db.select().from(baseDocuments).where(
-      opts.since
-        ? and(eq(baseDocuments.collectionId, collectionId), gt(baseDocuments.updatedAt, new Date(opts.since)))
-        : eq(baseDocuments.collectionId, collectionId),
-    );
+    const conds = [eq(baseDocuments.collectionId, collectionId)];
+    if (opts.since) conds.push(gt(baseDocuments.updatedAt, new Date(opts.since)));
+    if (opts.afterId) conds.push(gt(baseDocuments.id, opts.afterId));
+    const base = db.select().from(baseDocuments).where(and(...conds));
     const rows = opts.since
       ? await base.orderBy(asc(baseDocuments.updatedAt), asc(baseDocuments.id)).limit(limit)
       : await base.orderBy(asc(baseDocuments.id)).limit(limit);
@@ -359,7 +380,106 @@ export async function listDocumentRecs(
   } else {
     docs.sort((a, b) => a.id.localeCompare(b.id));
   }
+  if (opts.afterId) docs = docs.filter((d) => d.id > opts.afterId!);
   return docs.slice(0, limit).map(cloneJson);
+}
+
+/**
+ * Page through a whole collection without buffering one giant query (#29).
+ * Returns up to `max` documents; callers enforce their own limit. This keeps
+ * the API process responsive for large collections instead of failing outright
+ * at 10k rows.
+ */
+export async function listAllDocumentRecs(
+  collectionId: string,
+  opts: { max?: number; pageSize?: number } = {},
+): Promise<StoredDocument[]> {
+  const max = Math.min(Math.max(Number(opts.max) || 200_000, 1), 1_000_000);
+  const pageSize = Math.min(Math.max(Number(opts.pageSize) || 5000, 1), 20_000);
+  const out: StoredDocument[] = [];
+  let afterId: string | undefined;
+  while (out.length < max) {
+    const page = await listDocumentRecs(collectionId, {
+      afterId,
+      scanLimit: Math.min(pageSize, max - out.length),
+    });
+    if (!page.length) break;
+    out.push(...page);
+    if (page.length < pageSize) break;
+    afterId = page[page.length - 1].id;
+  }
+  return out;
+}
+
+/** One LIMIT/OFFSET page in id order. Postgres reads only the requested window
+ *  instead of buffering every preceding row (#29). */
+export async function listDocumentRecsPage(
+  collectionId: string,
+  opts: { limit: number; offset: number },
+): Promise<StoredDocument[]> {
+  const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 1000);
+  const offset = Math.max(Number(opts.offset) || 0, 0);
+  if (db) {
+    await ensureTables();
+    const rows = await pgQuery<any>(
+      `SELECT collection_id, id, data, version, created_at, updated_at
+         FROM synapseone_base_documents
+        WHERE collection_id = $1
+        ORDER BY id ASC
+        LIMIT $2 OFFSET $3`,
+      [collectionId, limit, offset],
+    );
+    return rows.map(pgRowToDocument);
+  }
+  return listDocumentRecs(collectionId, { scanLimit: offset + limit }).then((docs) =>
+    docs.slice(offset, offset + limit),
+  );
+}
+
+/**
+ * Execute a parsed query in Postgres (#29): filter, order and pagination run
+ * in the database; only the requested page is returned to the API process.
+ * The in-memory path keeps using `applyQuery` in query.ts.
+ */
+export async function queryDocumentRecs(
+  collectionId: string,
+  spec: QuerySpec,
+  mapping?: BaseMapping | null,
+): Promise<QueryResult> {
+  if (!db) {
+    throw new Error('[base] queryDocumentRecs requires Postgres');
+  }
+  await ensureTables();
+  const compiled = compileQuery(collectionId, spec);
+  const countRows = await pgQuery<{ n: number }>(
+    `SELECT count(*)::int AS n FROM synapseone_base_documents WHERE ${compiled.whereSql}`,
+    compiled.whereParams,
+  );
+  const total = Number(countRows[0]?.n) || 0;
+  const pageRows = await pgQuery<any>(
+    `SELECT collection_id, id, data, version, created_at, updated_at
+       FROM synapseone_base_documents
+      WHERE ${compiled.whereSql}
+      ORDER BY ${compiled.orderSql}
+      LIMIT $${compiled.allParams.length + 1} OFFSET $${compiled.allParams.length + 2}`,
+    [...compiled.allParams, spec.limit, spec.offset],
+  );
+  const docs = pageRows.map(pgRowToDocument);
+  const views = docs.map((d) => ({
+    id: d.id, data: d.data, version: d.version, created_at: d.created_at, updated_at: d.updated_at,
+  }));
+  return formatQueryPage(views, spec, mapping, total);
+}
+
+/** Exact document count for the collection (indexed count on Postgres). */
+export async function countDocumentRecs(collectionId: string): Promise<number> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.select({ n: sql<number>`count(*)::int` })
+      .from(baseDocuments).where(eq(baseDocuments.collectionId, collectionId));
+    return Number(rows[0]?.n) || 0;
+  }
+  return memDocuments.get(collectionId)?.size || 0;
 }
 
 export async function setDocumentRec(
@@ -559,14 +679,42 @@ export async function documentStatsRec(collectionId: string): Promise<{ document
   return { documents: docs.length, bytes, lastUpdatedAt: last };
 }
 
+/** All documents matching a filter, pushed down to Postgres when available.
+ *  Used by vector search, where scoring still happens in the service but the
+ *  metadata filter narrows candidates in SQL (#29). */
+export async function listDocumentRecsMatching(
+  collectionId: string,
+  where: QuerySpec['where'],
+  max = 200_000,
+): Promise<StoredDocument[]> {
+  const limit = Math.min(Math.max(Number(max) || 200_000, 1), 1_000_000);
+  if (!db) return listAllDocumentRecs(collectionId, { max: limit });
+  const compiled = compileQuery(collectionId, {
+    where,
+    orderBy: [],
+    limit,
+    offset: 0,
+    as: 'data',
+  });
+  const rows = await pgQuery<any>(
+    `SELECT collection_id, id, data, version, created_at, updated_at
+       FROM synapseone_base_documents
+      WHERE ${compiled.whereSql}
+      ORDER BY id ASC
+      LIMIT $${compiled.allParams.length + 1}`,
+    [...compiled.allParams, limit],
+  );
+  return rows.map(pgRowToDocument);
+}
+
 /** Vector search over collection documents with metadata filtering. */
 export async function vectorSearchRec(
   collectionId: string,
   spec: VectorSearchSpec,
   mapping?: BaseMapping | null,
-  scanLimit = 10000,
+  scanLimit = 200_000,
 ): Promise<VectorSearchResult> {
-  const docs = await listDocumentRecs(collectionId, { scanLimit });
+  const docs = await listDocumentRecsMatching(collectionId, spec.where, scanLimit);
   return applyVectorSearch(docs, spec, mapping);
 }
 

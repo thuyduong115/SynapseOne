@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import type { Server } from 'http';
 import { createApp } from './index';
 import { __clearFaststoreMem } from './store';
+import { __auditEvents, __clearAudit } from './audit';
 
 let server: Server;
 let base = '';
@@ -307,4 +308,32 @@ test('authentication and validation', async () => {
 
   const badBatch = await call('POST', '/v1/faststore/batch', { operations: {} });
   assert.equal(badBatch.status, 400);
+});
+
+test('mutation audit records actor, tenant, action and result (#32)', async () => {
+  __clearAudit();
+  const put = await call('PUT', '/v1/faststore/keys/audit:key', { value: 'super-secret-value' });
+  assert.equal(put.status, 201);
+  await new Promise((r) => setImmediate(r));
+
+  const event = __auditEvents().find((e) => e.action === 'faststore:keys:update');
+  assert.ok(event, JSON.stringify(__auditEvents()));
+  assert.equal(event.actorType, 'user');
+  assert.equal(event.actorId, 'user-1');
+  assert.equal(event.orgId, 'tenant-a');
+  assert.equal(event.result, 'allowed');
+  assert.equal(event.statusCode, 201);
+  assert.equal((event.context.params as any).key, '***', 'cache keys can contain identifiers and are masked');
+  assert.ok(!JSON.stringify(__auditEvents()).includes('super-secret-value'), 'values must never enter the audit trail');
+
+  const denied = await call('PUT', '/v1/faststore/keys/audit:key', {});
+  assert.equal(denied.status, 400);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(__auditEvents().some((e) => e.action === 'faststore:keys:update' && e.result === 'denied'));
+
+  // Read-only POST endpoints are not mutations.
+  const before = __auditEvents().length;
+  await call('POST', '/v1/faststore/sets/audit:set/contains', { member: 'x' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(__auditEvents().length, before);
 });

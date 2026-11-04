@@ -12,7 +12,7 @@
  * move to the dead-letter set and can be replayed.
  */
 import Redis from 'ioredis';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 
 export type QueueErrorCode = 'not_found' | 'conflict' | 'invalid' | 'storage_unavailable';
 
@@ -595,6 +595,8 @@ export async function reclaimExpired(tenant: string, name: string, now = Date.no
 
 const CONSUME_LUA = `
   local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
+  local receipts = cjson.decode(ARGV[5])
+  local ri = 0
   local out = {}
   for _, id in ipairs(ids) do
     local raw = redis.call('HGET', KEYS[2], id)
@@ -603,8 +605,8 @@ const CONSUME_LUA = `
       local env = cjson.decode(raw)
       env.attempts = (env.attempts or 0) + 1
       env.available_at = nil
-      local seq = redis.call('HINCRBY', KEYS[5], 'receipt_seq', 1)
-      local receipt = id .. ':' .. seq
+      ri = ri + 1
+      local receipt = receipts[ri]
       env.receipt = receipt
       env.consumer = ARGV[4]
       local deadline = tonumber(ARGV[1]) + tonumber(ARGV[3])
@@ -618,6 +620,11 @@ const CONSUME_LUA = `
   end
   return out
 `;
+
+/** Opaque, unguessable lease receipt (128 bits, base64url). */
+export function newReceipt(): string {
+  return 'rcpt_' + randomBytes(18).toString('base64url');
+}
 
 export async function consumeMessages(
   tenant: string,
@@ -640,8 +647,9 @@ export async function consumeMessages(
       if (!row) continue;
       row.envelope.attempts = (row.envelope.attempts || 0) + 1;
       delete row.envelope.available_at;
-      q.seq += 1;
-      const receipt = `${id}:${q.seq}`;
+      // Receipts are opaque capability tokens: random, never derivable from
+      // the public message id (issue #31).
+      const receipt = newReceipt();
       const deadline = now + opts.visibilityTimeoutSeconds * 1000;
       row.envelope.receipt = receipt;
       row.envelope.consumer = opts.consumer || 'consumer';
@@ -653,10 +661,13 @@ export async function consumeMessages(
     return out;
   }
   const k = keysFor(tenant, name);
+  // Generate the capability tokens in Node (Redis scripts must stay
+  // deterministic) and hand them to Lua.
+  const receipts = JSON.stringify(Array.from({ length: Math.max(1, opts.maxMessages) }, () => newReceipt()));
   const raw = await r(async () => (redis as any).eval(
     CONSUME_LUA, 5,
     k.pending, k.messages, k.inflight, k.receipts, k.meta,
-    String(now), String(opts.maxMessages), String(opts.visibilityTimeoutSeconds * 1000), opts.consumer || 'consumer',
+    String(now), String(opts.maxMessages), String(opts.visibilityTimeoutSeconds * 1000), opts.consumer || 'consumer', receipts,
   ) as string[][]);
   const rows = Array.isArray(raw) ? raw : [];
   const ids = rows.map((row) => String(row[0]));

@@ -9,8 +9,9 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Server } from 'http';
-import { createApp } from './index';
+import { assertProductionConfig, createApp } from './index';
 import { getStreamEngine, registerStreamEngine, listAvailableEngines } from './engines';
+import { __auditEvents, __clearAudit } from './audit';
 
 let server: Server;
 let base = '';
@@ -241,4 +242,59 @@ test('pluggable engine driver registry', () => {
 
   const available = listAvailableEngines();
   assert.ok(available.includes('custom-mock'));
+});
+
+test('production fails closed on missing secret, memory engine and wildcard CORS', () => {
+  const base = { NODE_ENV: 'production' } as NodeJS.ProcessEnv;
+  assert.throws(
+    () => assertProductionConfig(base),
+    /SYNAPSEONE_INTERNAL_SECRET must be set/,
+  );
+  assert.throws(
+    () => assertProductionConfig({ ...base, SYNAPSEONE_INTERNAL_SECRET: 's', CORS_ORIGIN: 'https://a.example' }),
+    /STREAM_ENGINE or STREAM_REDIS_URL/,
+  );
+  assert.throws(
+    () => assertProductionConfig({ ...base, SYNAPSEONE_INTERNAL_SECRET: 's', CORS_ORIGIN: 'https://a.example', STREAM_ENGINE: 'memory' }),
+    /memory is forbidden/,
+  );
+  assert.throws(
+    () => assertProductionConfig({ ...base, SYNAPSEONE_INTERNAL_SECRET: 's', STREAM_ENGINE: 'redis', REDIS_URL: 'redis://x:6379' }),
+    /CORS_ORIGIN must be set/,
+  );
+  assert.doesNotThrow(() => assertProductionConfig({
+    ...base,
+    SYNAPSEONE_INTERNAL_SECRET: 's',
+    CORS_ORIGIN: 'https://a.example',
+    STREAM_ENGINE: 'redis',
+    REDIS_URL: 'redis://x:6379',
+  }));
+});
+
+test('mutation audit records actor, tenant, action and result (#32)', async () => {
+  __clearAudit();
+  const topic = await call('PUT', '/v1/stream/topics/audit-topic', { maxLen: 100 });
+  assert.equal(topic.status, 201);
+  const pub = await call('POST', '/v1/stream/topics/audit-topic/events', { payload: { secret: 'super-secret-value' } });
+  assert.equal(pub.status, 201, JSON.stringify(pub.json));
+  await new Promise((r) => setImmediate(r));
+
+  const event = __auditEvents().find((e) => e.action === 'stream:topics.events:create');
+  assert.ok(event, JSON.stringify(__auditEvents()));
+  assert.equal(event.actorType, 'user');
+  assert.equal(event.actorId, 'user-1');
+  assert.equal(event.orgId, 'tenant-a');
+  assert.equal(event.result, 'allowed');
+  assert.equal(event.statusCode, 201);
+  assert.ok(!JSON.stringify(__auditEvents()).includes('super-secret-value'), 'event payloads must never enter the audit trail');
+
+  const denied = await call('PUT', '/v1/stream/topics/bad topic!', {});
+  assert.equal(denied.status, 400);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(__auditEvents().some((e) => e.action === 'stream:topics:update' && e.result === 'denied'));
+
+  const before = __auditEvents().length;
+  await call('POST', '/v1/stream/topics/audit-topic/read', { maxMessages: 1 });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(__auditEvents().length, before, 'reads must not add mutation events');
 });

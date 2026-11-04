@@ -6,7 +6,7 @@ by concern to keep context small.
 ## What this is
 
 SynapseOne v0.7.0 — Apache-2.0 "Tier-1 PaaS": one API gateway, AWS-style IAM,
-Postgres/Redis data plane (S3 is provisioned but not exposed yet), built-in
+Postgres/Redis data plane + tenant-scoped object storage (S3-compatible), built-in
 workflow engine, NGSI-LD linked data (SynapseLDS), document DB (SynapseBase),
 Redis cache (Synapse Faststore), and at-least-once queue (SynapseQueue).
 Clients: React Console, TypeScript/Python/Go SDKs, zero-dependency CLI.
@@ -51,13 +51,18 @@ Skip: `node_modules/`, `apps/*/dist/`, `.pytest_cache/`, `.ruff_cache/`,
 | `apps/base-service` | SynapseBase document DB + mapping + vector search | 4005 | Postgres / memory |
 | `apps/faststore-service` | Synapse Faststore cache/KV/data structures/locks | 4006 | Redis / memory |
 | `apps/queue-service` | SynapseQueue messaging, leases, retries, DLQ | 4007 | Redis / memory |
+| `apps/stream-service` | SynapseStream tenant-scoped event log | 4009 | Redis Streams / memory |
+| `apps/storage-service` | SynapseObjectStorage objects, multipart, presign, quotas | 4010 | S3 / filesystem |
+| `apps/notifications-service` | SynapseNotifications outbox, templates, preferences, delivery | 4011 | Postgres / memory + queue |
 | `apps/inference-service` | Python FastAPI LLM proxy + embeddings + decision | 4008 | local models / OpenRouter |
 | `apps/console` | Admin UI | 3000 (nginx :80) | calls gateway |
 | `sdks/sdk-js`, `sdks/sdk-python`, `sdks/sdk-go` | Client SDKs | — | — |
 | `tools/cli` | `synapseone` CLI (zero deps, Node 18+) | — | — |
 
 Infra: Postgres 5432, Redis 6379, S3 9090, Prometheus 9091. In production only
-the gateway (and TLS edge) is public; service ports stay internal.
+the gateway (and TLS edge) is public; service ports stay internal. Object
+storage requires `STORAGE_BACKEND` explicitly in production (`s3` with
+S3/MinIO credentials, or `fs` with a durable volume).
 
 ## Request path
 
@@ -72,7 +77,7 @@ Gateway :8080 ── route match from apps/gateway/routes.yaml
 IAM / Workflow / LDS / Base / Faststore / Queue / AI / Inference
         │ derive tenant from stamped org/account/user
         ▼
-Postgres · Redis · S3 (provisioned)
+Postgres · Redis · S3-compatible object storage · notification relays
 ```
 
 ## Non-negotiable invariants
@@ -98,7 +103,15 @@ Postgres · Redis · S3 (provisioned)
    gate (`make license-check`) fails on GPL/AGPL/LGPL.
 9. **New public paths need a gateway route** in `apps/gateway/routes.yaml`,
    otherwise the gateway returns 404 before the upstream sees the request.
-10. **Keep versions in sync** at `0.7.0` across packages, Compose images, and SDKs.
+   New services in this version: stream (`/v1/stream`), storage
+   (`/v1/storage`), notifications (`/v1/notifications`).
+10. **Scopes are enforced at the gateway.** API keys/delegated tokens must hold
+    a matching `<service>:read|write|*` scope; user JWTs carry `*`. Minting a
+    key/SA token can never widen the caller's scopes.
+11. **Identity is first-party by default.** Password registration/login/reset
+    work in production; OIDC uses a PUBLIC HTTPS issuer (internal Docker hosts
+    are rejected at boot). Tier-2 uses `/v1/auth/exchange` for per-user tokens.
+12. **Keep versions in sync** at `0.7.0` across packages, Compose images, and SDKs.
 
 ## Commands
 

@@ -19,7 +19,7 @@ stamping, edge hardening, telemetry, aggregate readiness.
 upstreams. `routes.yaml` covers `/v1/auth`, IAM resources, `/v1/workflows`,
 `/v1/templates`, `/v1/executions`, `/v1/credentials`, public `/webhook`,
 `/v1/ai`, `/v1/inference`, LDS public + management, `/v1/base`,
-`/v1/faststore`, `/v1/queue`.
+`/v1/faststore`, `/v1/queue`, `/v1/stream`, `/v1/storage`, `/v1/notifications`.
 
 **Rules:**
 - Auth modes per route: `none|jwt|apikey|either`; route specificity by literal
@@ -30,7 +30,13 @@ upstreams. `routes.yaml` covers `/v1/auth`, IAM resources, `/v1/workflows`,
 - No global `express.json()` (must preserve raw proxy body). No path rewrite.
 - Per-route `timeoutMs` 1–300 s (LLM/webhook routes are longer); 502 on upstream
   failure, 504 on timeout.
-- In-memory per-IP limits: `/v1/auth/*` 120/min, `/ready` 30/min. No Redis use.
+- In-memory per-client limits: `/v1/auth/*` 120/min, `/ready` 30/min,
+  inference/AI per-tenant `INFERENCE_RATE_LIMIT_PER_MIN` (default 60, 429 +
+  `Retry-After`). Keys on `req.ip`; set `TRUST_PROXY` behind the edge.
+- Per-route scope enforcement (`src/scopes.ts`): `<service>:read|write|*` or a
+  concrete verb; 403 `scope_denied` before proxying. User JWTs carry `*`.
+- `/ready` probes iam/workflow/ai/lds/base/faststore/queue plus stream,
+  inference, storage and notifications when their URLs are configured.
 - Usage telemetry on by default (`USAGE_TELEMETRY=false` disables); excluded
   paths are in `usage.ts`.
 - `/ready` probes IAM, Workflow, AI, LDS, Base, Faststore, Queue (not Inference).
@@ -239,9 +245,18 @@ validation), `src/query.ts` (filters/order/cursor/vector), `src/store.ts`
   Mapping is a view + validation contract, not a raw-data whitelist.
 - Reads accept `as=object` to return mapped keys only.
 - Filters: `eq, ne, gt, gte, lt, lte, in, nin, contains, startsWith, endsWith,
-  exists`, composed with `and/or/not`; max 50 filters; orderBy array; limit
-  1..1000; `cursor` (base64 offset) xor `offset`; query scan cap
-  `BASE_QUERY_SCAN_LIMIT` (default 10k) → 413 when exceeded.
+  exists, text, near, within`, composed with `and/or/not`; max 50 filters;
+  orderBy array; limit 1..1000; `cursor` (base64 offset) xor `offset`.
+- Postgres executes filter/order/limit/count (#29): equality uses the
+  `idx_base_documents_data` GIN index, `$text` uses `idx_base_documents_fts`
+  (migration 0004), id order uses the PK. Geo/range predicates are pushed down
+  but not index-accelerated (no PostGIS). Only the in-memory dev fallback is
+  bounded by `BASE_QUERY_SCAN_LIMIT` (default 200k) and can return 413.
+- Vector ranking is still computed in the service; `where` candidates are
+  pushed to SQL. `GET /documents?withTotal=1` returns total + cursor and always
+  sets `X-Total-Count`.
+- Mutation audit: every non-GET `/v1/*` call emits actor/tenant/action/result to
+  IAM (`POST /v1/audit/ingest`), batch-flushed, best-effort (`AUDIT_TRAIL`).
 - Optimistic concurrency: `ifVersion` body or `If-Match` header; mismatch 409.
 - Increment is atomic for numeric paths.
 - Batch: 1..100 ops, partial-failure results.

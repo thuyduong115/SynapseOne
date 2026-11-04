@@ -17,7 +17,7 @@ import * as schema from './schema';
 
 export interface Organization { id: string; slug: string; display_name: string; created_at?: string }
 export interface Account { id: string; org_id: string; slug: string; display_name: string }
-export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string }
+export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string; password_hash?: string; email_verified?: boolean }
 export interface Role { id: string; account_id: string; slug: string; description?: string }
 export interface PolicyDoc { Version?: string; Statement: Array<{ Effect: 'Allow'|'Deny'; Action: string|string[]; Resource: string|string[]; Condition?: any }> }
 export interface Policy { id: string; account_id: string; slug: string; description?: string; document: PolicyDoc }
@@ -72,6 +72,7 @@ const mem = {
   apiKeys: new Map<string, any>(), // hash -> record
   refresh: new Map<string, any>(),
   serviceAccounts: new Map<string, any>(),
+  passwordResets: new Map<string, any>(), // hash -> { user_id, purpose, expires_at, used_at }
   usage: [] as any[], // request/feature usage events (schedule from gateway)
 };
 
@@ -111,8 +112,16 @@ function orgRow(r: { id: string; slug: string; displayName: string; createdAt?: 
 function accountRow(r: { id: string; orgId: string; slug: string; displayName: string }): Account {
   return { id: r.id, org_id: r.orgId, slug: r.slug, display_name: r.displayName };
 }
-function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null }): User {
-  return { id: r.id, org_id: r.orgId, email: r.email, display_name: r.displayName ?? undefined, external_sub: r.externalSub ?? undefined };
+function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null; passwordHash?: string | null; emailVerified?: boolean | null }): User {
+  return {
+    id: r.id,
+    org_id: r.orgId,
+    email: r.email,
+    display_name: r.displayName ?? undefined,
+    external_sub: r.externalSub ?? undefined,
+    password_hash: r.passwordHash ?? undefined,
+    email_verified: !!r.emailVerified,
+  };
 }
 function roleRow(r: { id: string; accountId: string; slug: string; description: string | null }): Role {
   return { id: r.id, account_id: r.accountId, slug: r.slug, description: r.description ?? '' };
@@ -427,6 +436,8 @@ export async function getUserById(id: string): Promise<User | null> {
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      passwordHash: schema.users.passwordHash,
+      emailVerified: schema.users.emailVerified,
     }).from(schema.users).where(eq(schema.users.id, id)).limit(1);
     return rows[0] ? userRow(rows[0]) : null;
   }
@@ -444,6 +455,8 @@ export async function findUserByOrgEmail(orgId: string, email: string): Promise<
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      passwordHash: schema.users.passwordHash,
+      emailVerified: schema.users.emailVerified,
     }).from(schema.users).where(and(
       eq(schema.users.orgId, orgId),
       eq(schema.users.email, email),
@@ -626,19 +639,35 @@ export async function logAudit(e: AuditEntry): Promise<void> {
   if (((__mem as any).audit as any[]).length > 1000) ((__mem as any).audit as any[]).splice(0, 100);
 }
 
-export async function listAudit(limit = 50, actorId?: string, allowed?: boolean, orgId?: string): Promise<any[]> {
-  const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
-  const dec = allowed === undefined ? undefined : !!allowed;
+export interface AuditQuery {
+  limit?: number;
+  offset?: number;
+  actor?: string;
+  allowed?: boolean;
+  orgId?: string;
+  action?: string;
+  resource?: string;
+  from?: Date;
+  to?: Date;
+}
+
+/** Audit query with filters + pagination (#32). Tenant scoping stays mandatory:
+ *  callers pass their resolved orgId and can never read another tenant's rows. */
+export async function queryAudit(q: AuditQuery = {}): Promise<any[]> {
+  const lim = Math.min(Math.max(Number(q.limit) || 50, 1), 200);
+  const off = Math.min(Math.max(Number(q.offset) || 0, 0), 100_000);
+  const dec = q.allowed === undefined ? undefined : !!q.allowed;
   if (db) {
     await ensureTables();
     const conds = [];
-    if (actorId) conds.push(eq(schema.auditLog.actorId, actorId));
+    if (q.actor) conds.push(eq(schema.auditLog.actorId, q.actor));
     if (dec !== undefined) conds.push(eq(schema.auditLog.decision, dec));
-    if (orgId) {
-      // Tenant scoping (#7): rows belong to the org they targeted
-      // (context.org) or to the org of the caller who triggered them
-      // (context.callerOrg, e.g. dry-run rows).
-      conds.push(sql`(${schema.auditLog.context}->>'org' = ${orgId} OR ${schema.auditLog.context}->>'callerOrg' = ${orgId})`);
+    if (q.action) conds.push(eq(schema.auditLog.action, q.action));
+    if (q.resource) conds.push(eq(schema.auditLog.resource, q.resource));
+    if (q.from) conds.push(sql`${schema.auditLog.createdAt} >= ${q.from}`);
+    if (q.to) conds.push(sql`${schema.auditLog.createdAt} <= ${q.to}`);
+    if (q.orgId) {
+      conds.push(sql`(${schema.auditLog.context}->>'org' = ${q.orgId} OR ${schema.auditLog.context}->>'callerOrg' = ${q.orgId})`);
     }
     const where = conds.length ? and(...conds) : undefined;
     const rows = await db.select({
@@ -650,7 +679,7 @@ export async function listAudit(limit = 50, actorId?: string, allowed?: boolean,
       resource: schema.auditLog.resource,
       decision: schema.auditLog.decision,
       context: schema.auditLog.context,
-    }).from(schema.auditLog).where(where).orderBy(desc(schema.auditLog.createdAt)).limit(lim);
+    }).from(schema.auditLog).where(where).orderBy(desc(schema.auditLog.createdAt)).limit(lim).offset(off);
     return rows.map((r) => ({
       id: r.id,
       created_at: iso(r.createdAt),
@@ -663,12 +692,23 @@ export async function listAudit(limit = 50, actorId?: string, allowed?: boolean,
     }));
   }
   const all: any[] = (((__mem as any).audit as any[]) || []).slice().reverse();
-  const filtered = all.filter(
-    (a) => (!actorId || a.actor_id === actorId)
+  const fromMs = q.from ? q.from.getTime() : -Infinity;
+  const toMs = q.to ? q.to.getTime() : Infinity;
+  const filtered = all.filter((a) => {
+    const at = Date.parse(String(a.created_at || '')) || 0;
+    return (!q.actor || a.actor_id === q.actor)
       && (dec === undefined || !!a.decision === dec)
-      && (!orgId || a.context?.org === orgId || a.context?.callerOrg === orgId),
-  );
-  return filtered.slice(0, lim);
+      && (!q.action || a.action === q.action)
+      && (!q.resource || a.resource === q.resource)
+      && (!q.orgId || a.context?.org === q.orgId || a.context?.callerOrg === q.orgId)
+      && at >= fromMs
+      && at <= toMs;
+  });
+  return filtered.slice(off, off + lim);
+}
+
+export async function listAudit(limit = 50, actorId?: string, allowed?: boolean, orgId?: string): Promise<any[]> {
+  return queryAudit({ limit, actor: actorId, allowed, orgId });
 }
 
 /** Retention purge: delete audit rows older than `olderThanDays` (batched).
@@ -746,6 +786,88 @@ export async function getServiceAccount(id: string): Promise<ServiceAccount | nu
       : null;
   }
   return (__mem.serviceAccounts.get(id) as ServiceAccount) || null;
+}
+
+/** Set/replace a user's password hash (never returns the hash to callers). */
+export async function setUserPassword(userId: string, hash: string): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.update(schema.users)
+      .set({ passwordHash: hash, passwordUpdatedAt: new Date() })
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id });
+    return rows.length > 0;
+  }
+  const u = mem.users.get(userId);
+  if (!u) return false;
+  u.password_hash = hash;
+  return true;
+}
+
+export async function markEmailVerified(userId: string): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.update(schema.users)
+      .set({ emailVerified: true })
+      .where(eq(schema.users.id, userId))
+      .returning({ id: schema.users.id });
+    return rows.length > 0;
+  }
+  const u = mem.users.get(userId);
+  if (!u) return false;
+  u.email_verified = true;
+  return true;
+}
+
+/** Store a hashed single-use token (password reset or email verification). */
+export async function storeOneTimeToken(
+  userId: string,
+  tokenHash: string,
+  purpose: 'reset' | 'verify',
+  expiresAt: Date,
+): Promise<void> {
+  if (db) {
+    await ensureTables();
+    // Invalidate any outstanding token of the same purpose for this user.
+    await db.update(schema.passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(schema.passwordResetTokens.userId, userId),
+        eq(schema.passwordResetTokens.purpose, purpose),
+        sql`${schema.passwordResetTokens.usedAt} is null`,
+      ));
+    await db.insert(schema.passwordResetTokens).values({ userId, tokenHash, purpose, expiresAt });
+    return;
+  }
+  for (const rec of mem.passwordResets.values()) {
+    if (rec.user_id === userId && rec.purpose === purpose && !rec.used_at) rec.used_at = new Date().toISOString();
+  }
+  mem.passwordResets.set(tokenHash, { user_id: userId, purpose, expires_at: expiresAt.toISOString(), used_at: null });
+}
+
+/** Atomically consume a single-use token. Returns the owning user id. */
+export async function consumeOneTimeToken(
+  tokenHash: string,
+  purpose: 'reset' | 'verify',
+): Promise<string | null> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.update(schema.passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(schema.passwordResetTokens.tokenHash, tokenHash),
+        eq(schema.passwordResetTokens.purpose, purpose),
+        sql`${schema.passwordResetTokens.usedAt} is null`,
+        sql`${schema.passwordResetTokens.expiresAt} > now()`,
+      ))
+      .returning({ userId: schema.passwordResetTokens.userId });
+    return rows[0]?.userId ?? null;
+  }
+  const rec = mem.passwordResets.get(tokenHash);
+  if (!rec || rec.used_at || rec.purpose !== purpose) return null;
+  if (new Date(rec.expires_at).getTime() < Date.now()) return null;
+  rec.used_at = new Date().toISOString();
+  return rec.user_id;
 }
 
 export const __mem = mem;

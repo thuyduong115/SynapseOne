@@ -43,7 +43,11 @@ Two consequences worth remembering:
 - `maxAttempts` is enforced on **nack**, not on lease expiry. A repeatedly
   crashing consumer can redeliver a message indefinitely; a consumer that
   positively rejects it will exhaust the budget and dead-letter it.
-- Ack/nack with an unknown or already-used receipt returns `404 receipt_not_found`.
+- Ack/nack with an unknown, forged or already-used receipt returns `404 receipt_not_found`.
+- Receipts are **opaque capability tokens** (`rcpt_` + 128 random bits). They are not
+  derived from the message id or a sequence, so a same-tenant peer who can peek ids
+  cannot guess another consumer's lease. Treat a receipt like a bearer secret: do not
+  log or share it.
   A duplicate ack is not an error to retry blindly — check whether work was
   already completed.
 

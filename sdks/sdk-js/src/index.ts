@@ -32,6 +32,9 @@ import { QueueService } from './queue';
 import { StreamService } from './stream';
 import { InferenceService } from './inference';
 import { AiService } from './ai';
+import { HealthService } from './health';
+import { StorageService } from './storage';
+import { NotificationsService } from './notifications';
 
 export * from './_http';
 export * from './iam';
@@ -43,6 +46,9 @@ export * from './faststore';
 export * from './queue';
 export * from './stream';
 export * from './inference';
+export * from './health';
+export * from './storage';
+export * from './notifications';
 
 /** Legacy flat LDS signatures (the namespaced service drops the `lds` prefix). */
 export interface LdsLegacyMethods {
@@ -71,6 +77,10 @@ export class SynapseOneClient {
   readonly queue: QueueService;
   readonly stream: StreamService;
   readonly inference: InferenceService;
+  readonly storage: StorageService;
+  readonly notifications: NotificationsService;
+  readonly health: HealthService;
+  readonly readiness: HealthService;
 
   constructor(opts: SynapseOneClientOptions = {}) {
     this.http = new HttpClient(opts);
@@ -83,7 +93,19 @@ export class SynapseOneClient {
     this.queue = new QueueService(this.http);
     this.stream = new StreamService(this.http);
     this.inference = new InferenceService(this.http);
+    this.storage = new StorageService(this.http);
+    this.notifications = new NotificationsService(this.http);
+    this.health = new HealthService(this.http);
+    // Alias: `client.readiness.ready()` reads naturally; same instance.
+    this.readiness = this.health;
   }
+
+  /** Shallow gateway health. */
+  getHealth(opts?: import('./_http').RequestOptions) { return this.health.health(opts); }
+  /** Aggregate readiness; returns the payload on 503 unless `throwOnDegraded`. */
+  getReady(opts?: import('./health').ReadyOptions) { return this.health.ready(opts); }
+  /** Projected `{ok, tier1, upstreams}` status for Tier-2 readiness endpoints. */
+  getStatus(opts?: import('./health').ReadyOptions) { return this.health.status(opts); }
 
   get baseUrl(): string { return this.http.baseUrl; }
   setToken(t: string): void { this.http.setToken(t); }
@@ -101,7 +123,9 @@ export class SynapseOneClient {
 export interface SynapseOneClient extends Pick<IamService, keyof IamService>, Pick<WorkflowService, keyof WorkflowService>, LdsLegacyMethods {}
 
 const IAM_METHODS = [
-  'login', 'refresh', 'logout', 'logoutAll', 'verify', 'me',
+  'login', 'register', 'loginWithPassword', 'changePassword', 'requestPasswordReset',
+  'resetPassword', 'verifyEmail', 'requestEmailVerification', 'listSessions', 'revokeSession',
+  'exchangeToken', 'refresh', 'logout', 'logoutAll', 'verify', 'me',
   'oidcConfig', 'oidcStart', 'oidcCallback',
   'listOrgs', 'createOrg', 'listAccounts', 'listUsers', 'createUser',
   'createAccount', 'userPolicies',

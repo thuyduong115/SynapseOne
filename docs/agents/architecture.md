@@ -20,7 +20,7 @@ Browser / CLI / SDK
     │      │      │      │                 │
     └──────┴──────┴──────┴─── Postgres 16 ─┘
                   Redis 7 (Faststore + Queue)
-                  S3-compatible (provisioned; no service API yet)
+                  S3-compatible object storage (storage-service)
 ```
 
 - Console is a static React SPA served by nginx (`:3000` in Compose, `:80`
@@ -178,9 +178,10 @@ edit an applied migration; add a new one.
 
 ### Object storage
 
-S3/S3Mock is provisioned and the bucket is created by `s3-init`, but no service
-code exposes object storage yet (roadmap: presigned bucket API). Do not assume
-an S3 client exists.
+`storage-service` exposes tenant-scoped object storage at `/v1/storage`
+(direct + multipart upload, presigned URLs, checksums, quotas) over S3Mock in
+dev and MinIO/AWS S3 in production. Tier-3 products upload files and store the
+returned key instead of embedding base64 data URLs.
 
 ### Memory fallbacks
 
@@ -257,7 +258,8 @@ headers; `_core` is never read.
   gateway uses an in-memory per-IP limiter; no Redis client is imported there.
 - API-key **scopes** are stored and returned by IAM, but the gateway does not
   enforce them yet (roadmap). Do not assume scope-based restrictions.
-- S3 is provisioned but has no service API yet.
+- Object storage is exposed by `storage-service` (`/v1/storage`); notifications by
+  `notifications-service` (`/v1/notifications`).
 - `apps/tunnel-service/` contains only stale `dist/` artifacts and no source or
   package manifest; it is not part of the workspace.
 - `/ready` probes IAM, Workflow, AI, LDS, Base, Faststore, Queue, but not

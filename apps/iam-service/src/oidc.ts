@@ -21,12 +21,71 @@ export interface OidcSettings {
 
 export function oidcSettings(): OidcSettings {
   return {
-    issuer: (process.env.OIDC_ISSUER || 'http://authentik-server:9000/application/o/synapseone/').replace(/\/*$/, '/'),
+    // Public HTTPS issuer (browser-reachable). The old internal
+    // http://authentik-server:9000 default made production login impossible.
+    issuer: (process.env.OIDC_ISSUER || 'https://auth.synapseone.space/application/o/synapseone/').replace(/\/*$/, '/'),
     clientId: process.env.OIDC_CLIENT_ID || 'synapseone-platform',
     clientSecret: process.env.OIDC_CLIENT_SECRET || '',
     redirectUri: process.env.OIDC_REDIRECT_URI || 'http://localhost:3000/oidc/callback',
     provider: process.env.OIDC_PROVIDER || 'authentik',
   };
+}
+
+/** True when a URL is HTTPS and its host is publicly resolvable (not an
+ *  internal docker/k8s name, loopback or RFC1918 address). */
+export function isPublicHttpsUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost')) return false;
+  if (host.endsWith('.internal') || host.endsWith('.local') || host.endsWith('.svc')) return false;
+  if (!host.includes('.')) return false; // bare service name (iam, authentik-server)
+  if (/^127\./.test(host) || host === '::1' || host === '[::1]') return false;
+  if (/^10\./.test(host) || /^192\.168\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+  if (/^169\.254\./.test(host)) return false;
+  return true;
+}
+
+/** Production boot guard for the OIDC configuration (issue #21).
+ *  A browser must be able to reach the authorize URL over valid TLS. */
+export function assertOidcConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') return;
+  const rawIssuer = String(env.OIDC_ISSUER || '').trim();
+  if (!rawIssuer) {
+    throw new Error(
+      '[iam] OIDC_ISSUER must be configured in production with a public HTTPS issuer '
+      + '(e.g. https://auth.example.com/application/o/synapseone/).',
+    );
+  }
+  const issuer = rawIssuer.replace(/\/*$/, '/');
+  if (!isPublicHttpsUrl(issuer)) {
+    throw new Error(
+      `[iam] OIDC_ISSUER must be a public HTTPS URL in production (got '${issuer}'). `
+      + "Browsers cannot resolve an internal Docker host; configure e.g. https://auth.example.com/application/o/synapseone/.",
+    );
+  }
+  const clientId = String(env.OIDC_CLIENT_ID || '').trim();
+  if (!clientId || clientId.includes('change_me')) {
+    throw new Error('[iam] OIDC_CLIENT_ID must be set to the IdP client id in production.');
+  }
+  if (!env.OIDC_CLIENT_SECRET || env.OIDC_CLIENT_SECRET.includes('change_me')) {
+    throw new Error('[iam] OIDC_CLIENT_SECRET must be set to the IdP client secret in production.');
+  }
+  // The browser is redirected back to this URL, so it must be public HTTPS too
+  // (a localhost/internal callback is unreachable for the end user).
+  const redirect = env.OIDC_REDIRECT_URI || '';
+  if (!isPublicHttpsUrl(redirect)) {
+    throw new Error(
+      `[iam] OIDC_REDIRECT_URI must be a public HTTPS URL in production (got '${redirect || '(unset)'}'); `
+      + 'point it at the Console /oidc/callback page, e.g. https://cloud.example.com/oidc/callback.',
+    );
+  }
 }
 
 export class OidcError extends Error {
@@ -173,8 +232,14 @@ async function discover(issuer: string): Promise<any> {
   return doc;
 }
 
-async function getJwks(jwksUri: string): Promise<any[]> {
-  const hit = jwksCache.get(jwksUri);
+/** Resolve the browser-facing authorize endpoint from discovery (validated
+ *  by `discover`: https + issuer origin in production). */
+export async function authorizationEndpoint(issuer: string): Promise<string> {
+  const doc = await discover(issuer.replace(/\/*$/, '/'));
+  return String(doc.authorization_endpoint);
+}
+
+async function getJwks(jwksUri: string): Promise<any[]> {  const hit = jwksCache.get(jwksUri);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   const doc: any = await fetchJson(jwksUri, { headers: { Accept: 'application/json' } }, 10_000);
   if (!doc || !Array.isArray(doc.keys)) {

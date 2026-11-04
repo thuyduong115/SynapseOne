@@ -20,14 +20,15 @@ import { timingSafeEqual } from 'crypto';
 import { randomUUID } from 'crypto';
 import {
   createCollectionRec, findCollectionRec, getCollectionRec, listCollectionRecs, updateCollectionRec, deleteCollectionRec,
-  createDocumentRec, getDocumentRec, listDocumentRecs, setDocumentRec, deleteDocumentRec, incrementDocumentRec,
-  documentStatsRec, ensureTables, useDb, StoreError, StoredCollection,
+  createDocumentRec, getDocumentRec, listDocumentRecs, listDocumentRecsPage, listAllDocumentRecs, countDocumentRecs, setDocumentRec, deleteDocumentRec, incrementDocumentRec,
+  documentStatsRec, ensureTables, useDb, queryDocumentRecs, vectorSearchRec, listDocumentRecsMatching, StoreError, StoredCollection,
 } from './store';
 import {
   normalizeMapping, hasMapping, objectToData, dataToObject, normalizeDocumentData, validateDocumentData,
   validateDataAgainstMapping, deepMerge, unsetPath, cloneJson, MappingError, BaseMapping,
 } from './mapping';
-import { parseQuerySpec, applyQuery, parseVectorSearchSpec, applyVectorSearch, QueryError } from './query';
+import { parseQuerySpec, applyQuery, parseVectorSearchSpec, QueryError } from './query';
+import { auditMiddleware } from './audit';
 
 dotenv.config();
 const PORT = Number(process.env.PORT || 4005);
@@ -41,7 +42,8 @@ const VERSION = (() => {
 })();
 const IS_PROD = process.env.NODE_ENV === 'production';
 const MAX_DOCUMENT_BYTES = Math.min(Math.max(Number(process.env.BASE_MAX_DOCUMENT_BYTES || 262144), 1024), 4 * 1024 * 1024);
-const QUERY_SCAN_LIMIT = Math.min(Math.max(Number(process.env.BASE_QUERY_SCAN_LIMIT || 10000), 100), 100000);
+// Batched scan budget: no hard 10k cliff, but still bounded for safety (#29).
+const QUERY_SCAN_LIMIT = Math.min(Math.max(Number(process.env.BASE_QUERY_SCAN_LIMIT || 200000), 100), 1_000_000);
 
 export interface Principal {
   sub: string;
@@ -220,6 +222,8 @@ export function createApp(): express.Express {
     next();
   }) as any);
   app.use(express.json({ limit: '5mb' }));
+  // Data-plane mutation audit (#32): actor/tenant/action/result per write.
+  app.use(auditMiddleware('base'));
 
   // ---- Prometheus metrics (bounded cardinality) ----
   const METRIC_REQUESTS: Map<string, number> = new Map();
@@ -599,7 +603,17 @@ export function createApp(): express.Express {
       if (e instanceof QueryError) return res.status(400).json({ error: 'invalid_query', message: e.message });
       throw e;
     }
-    const docs = await listDocumentRecs(loaded.collection.id, { scanLimit: QUERY_SCAN_LIMIT + 1 });
+    // Postgres executes filter/order/pagination (#29); the API process only
+    // formats the requested page. The in-memory dev fallback keeps the
+    // historical scan engine.
+    if (useDb()) {
+      return res.json(await queryDocumentRecs(loaded.collection.id, spec, loaded.collection.mapping));
+    }
+    // Vector scoring still runs in-process; its metadata filter is pushed to
+    // Postgres, so only matching candidates are loaded (#29).
+    const docs = spec.vectorSearch
+      ? await listDocumentRecsMatching(loaded.collection.id, spec.where, QUERY_SCAN_LIMIT + 1)
+      : await listAllDocumentRecs(loaded.collection.id, { max: QUERY_SCAN_LIMIT + 1 });
     if (docs.length > QUERY_SCAN_LIMIT) {
       return res.status(413).json({
         error: 'collection_too_large',
@@ -621,15 +635,8 @@ export function createApp(): express.Express {
       if (e instanceof QueryError) return res.status(400).json({ error: 'invalid_query', message: e.message });
       throw e;
     }
-    const docs = await listDocumentRecs(loaded.collection.id, { scanLimit: QUERY_SCAN_LIMIT + 1 });
-    if (docs.length > QUERY_SCAN_LIMIT) {
-      return res.status(413).json({
-        error: 'collection_too_large',
-        message: `query scan limit is ${QUERY_SCAN_LIMIT} documents; narrow the collection or raise BASE_QUERY_SCAN_LIMIT`,
-      });
-    }
-    const views = docs.map((d) => ({ id: d.id, data: d.data, version: d.version, created_at: d.created_at, updated_at: d.updated_at }));
-    res.json(applyVectorSearch(views, spec, loaded.collection.mapping));
+    // Filter candidates in Postgres where possible (#29); scoring is local.
+    res.json(await vectorSearchRec(loaded.collection.id, spec, loaded.collection.mapping, QUERY_SCAN_LIMIT));
   });
 
   // ---- atomic increment ----
@@ -733,9 +740,29 @@ export function createApp(): express.Express {
     if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 1000 || !Number.isInteger(rawOffset) || rawOffset < 0) {
       return res.status(400).json({ error: 'invalid_pagination', message: 'limit 1..1000 and offset >= 0 required' });
     }
-    const docs = await listDocumentRecs(loaded.collection.id, { scanLimit: rawOffset + rawLimit });
-    const page = docs.slice(rawOffset, rawOffset + rawLimit);
-    res.json(page.map((d) => toApiDocument(d, 'data', loaded.collection.mapping)));
+    // Fetch only the requested window: Postgres LIMIT/OFFSET or a paged
+    // in-memory scan (#29).
+    const page = await listDocumentRecsPage(loaded.collection.id, { limit: rawLimit, offset: rawOffset });
+    const items = page.map((d) => toApiDocument(d, 'data', loaded.collection.mapping));
+    // `withTotal=1` opts into an envelope with the exact count and a next cursor;
+    // the default stays the historical bare array (backwards compatible), and
+    // X-Total-Count is always available for clients that need the count.
+    if (String(req.query.withTotal || '') === '1' || String(req.query.withTotal || '') === 'true') {
+      const total = await countDocumentRecs(loaded.collection.id);
+      const nextOffset = rawOffset + items.length;
+      res.setHeader('X-Total-Count', String(total));
+      res.json({
+        items,
+        total,
+        limit: rawLimit,
+        offset: rawOffset,
+        nextCursor: nextOffset < total ? Buffer.from(JSON.stringify({ v: 1, offset: nextOffset })).toString('base64url') : null,
+      });
+      return;
+    }
+    const total = await countDocumentRecs(loaded.collection.id);
+    res.setHeader('X-Total-Count', String(total));
+    res.json(items);
   });
 
   // Final error handler.

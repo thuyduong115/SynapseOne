@@ -12,6 +12,12 @@ import { BaseMapping, cloneJson, dataToObject, getPath } from './mapping';
 export const QUERY_OPS = [
   'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin',
   'contains', 'startsWith', 'endsWith', 'exists',
+  // Full-text-ish token match (#29): every whitespace-separated token must
+  // appear in the string value (case-insensitive).
+  'text',
+  // Geospatial operators (#29): `near` = radius around a point,
+  // `within` = GeoJSON polygon or bounding box.
+  'near', 'within',
 ] as const;
 export type QueryOp = (typeof QUERY_OPS)[number];
 
@@ -134,6 +140,33 @@ function parseFilter(input: unknown, depth = 0, mapping?: BaseMapping | null): F
       }
     }
     if (op === 'exists' && typeof input.value !== 'boolean') throw new QueryError('exists expects a boolean');
+    if (op === 'text' && (typeof input.value !== 'string' || !input.value.trim())) {
+      throw new QueryError('text expects a non-empty string');
+    }
+    if (op === 'near') {
+      const v: any = input.value;
+      if (!isPlainObject(v) || !Number.isFinite(Number(v.lat)) || !Number.isFinite(Number(v.lng))) {
+        throw new QueryError('near expects {lat,lng,maxDistanceKm?}');
+      }
+      if (v.maxDistanceKm !== undefined && (!Number.isFinite(Number(v.maxDistanceKm)) || Number(v.maxDistanceKm) < 0)) {
+        throw new QueryError('near.maxDistanceKm must be a non-negative number');
+      }
+    }
+    if (op === 'within') {
+      const v: any = input.value;
+      const bboxOk = isPlainObject(v) && Array.isArray(v.bbox) && v.bbox.length === 4 && v.bbox.every((x: any) => Number.isFinite(Number(x)));
+      const polyOk = isPlainObject(v) && String(v.type || '').toLowerCase() === 'polygon' && Array.isArray(v.coordinates);
+      const ringOk = isPlainObject(v) && Array.isArray(v.ring);
+      if (!bboxOk && !polyOk && !ringOk) {
+        throw new QueryError('within expects {bbox:[minLng,minLat,maxLng,maxLat]} or a GeoJSON Polygon');
+      }
+      // Bound the vertex count: the Postgres compiler emits one predicate per
+      // edge, so unbounded rings would create enormous statements (#29).
+      const ring: any = (v as any).type ? (v as any).coordinates?.[0] : (v as any).ring;
+      if (Array.isArray(ring) && ring.length > 500) {
+        throw new QueryError('within polygon supports at most 500 vertices');
+      }
+    }
     return { field, op, value: input.value };
   }
 
@@ -387,7 +420,7 @@ export function applyVectorSearch(
   const page = scored.slice(0, spec.limit);
 
   const items: VectorSearchItem[] = page.map(({ doc, similarity, distance }) => {
-    const data = project(doc.data || {}, spec.select);
+    const data = projectDocumentData(doc.data || {}, spec.select);
     return {
       id: doc.id,
       similarity,
@@ -483,12 +516,94 @@ function matches(node: FilterNode, doc: StoredDocumentView): boolean {
       return typeof value === 'string' && value.startsWith(String(node.value ?? ''));
     case 'endsWith':
       return typeof value === 'string' && value.endsWith(String(node.value ?? ''));
+    case 'text': {
+      // `$text` searches every string value (never field keys), mirroring the
+      // Postgres tsvector index used by the SQL path (#29).
+      const hay = (node.field === '$text' ? collectStringValues(doc.data) : (typeof value === 'string' ? value : '')).toLowerCase();
+      if (!hay) return false;
+      const tokens = String(node.value ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+      return tokens.length > 0 && tokens.every((t) => hay.includes(t));
+    }
+    case 'near': {
+      const p = geoPoint(value);
+      const q: any = node.value;
+      if (!p || !q) return false;
+      const max = Number(q.maxDistanceKm ?? q.radiusKm ?? 1);
+      return haversineKm(p, { lat: Number(q.lat), lng: Number(q.lng) }) <= max;
+    }
+    case 'within': {
+      const p = geoPoint(value);
+      const v: any = node.value;
+      if (!p || !v) return false;
+      if (Array.isArray(v.bbox) && v.bbox.length === 4) {
+        const [minLng, minLat, maxLng, maxLat] = v.bbox.map(Number);
+        return p.lng >= minLng && p.lng <= maxLng && p.lat >= minLat && p.lat <= maxLat;
+      }
+      const ring: number[][] | null = v.type
+        ? (Array.isArray(v.coordinates?.[0]) ? v.coordinates[0] : null)
+        : (Array.isArray(v.ring) ? v.ring : null);
+      if (!ring || ring.length < 3) return false;
+      return pointInRing(p, ring);
+    }
     default:
       return false;
   }
 }
 
-function project(data: Record<string, unknown>, select: string[] | undefined): Record<string, unknown> {
+/** Join every string value in a document (keys excluded) for `$text`. */
+function collectStringValues(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(collectStringValues).filter(Boolean).join(' ');
+  if (isPlainObject(value)) {
+    return Object.values(value).map(collectStringValues).filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+/** Read a geo point from `{lat,lng}`, `{latitude,longitude}` or GeoJSON
+ *  `[lng,lat]`, so products can keep either convention (#29). */
+export function geoPoint(value: unknown): { lat: number; lng: number } | null {
+  if (Array.isArray(value) && value.length >= 2) {
+    const lng = Number(value[0]);
+    const lat = Number(value[1]);
+    return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+  }
+  if (isPlainObject(value)) {
+    const v: any = value;
+    const lat = Number(v.lat ?? v.latitude);
+    const lng = Number(v.lng ?? v.lon ?? v.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
+}
+
+/** Great-circle distance in kilometres. */
+export function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371.0088;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+/** Ray-casting point-in-polygon. Ring points are GeoJSON `[lng,lat]`. */
+export function pointInRing(point: { lat: number; lng: number }, ring: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = Number(ring[i]?.[0]);
+    const yi = Number(ring[i]?.[1]);
+    const xj = Number(ring[j]?.[0]);
+    const yj = Number(ring[j]?.[1]);
+    if (![xi, yi, xj, yj].every(Number.isFinite)) continue;
+    const intersect = yi > point.lat !== yj > point.lat
+      && point.lng < ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+export function projectDocumentData(data: Record<string, unknown>, select: string[] | undefined): Record<string, unknown> {
   if (!select) return cloneJson(data);
   const out: Record<string, unknown> = {};
   for (const path of select) {
@@ -516,6 +631,34 @@ export interface QueryResult {
   limit: number;
   offset: number;
   nextCursor: string | null;
+}
+
+/** Format an already-filtered page (used by both the in-memory engine and the
+ *  Postgres pushdown path, so their response contracts cannot drift). */
+export function formatQueryPage(
+  page: StoredDocumentView[],
+  spec: QuerySpec,
+  mapping: BaseMapping | null | undefined,
+  total: number,
+): QueryResult {
+  const items = page.map((d) => {
+    const data = projectDocumentData(d.data || {}, spec.select);
+    return {
+      id: d.id,
+      version: d.version,
+      createdAt: d.created_at,
+      updatedAt: d.updated_at,
+      ...(spec.as === 'object' ? { object: dataToObject(data, mapping) } : { data }),
+    };
+  });
+  const nextOffset = spec.offset + page.length;
+  return {
+    items,
+    total,
+    limit: spec.limit,
+    offset: spec.offset,
+    nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
+  };
 }
 
 export function applyQuery(
@@ -566,22 +709,5 @@ export function applyQuery(
   }
   const total = filtered.length;
   const page = filtered.slice(spec.offset, spec.offset + spec.limit);
-  const items = page.map((d) => {
-    const data = project(d.data || {}, spec.select);
-    return {
-      id: d.id,
-      version: d.version,
-      createdAt: d.created_at,
-      updatedAt: d.updated_at,
-      ...(spec.as === 'object' ? { object: dataToObject(data, mapping) } : { data }),
-    };
-  });
-  const nextOffset = spec.offset + page.length;
-  return {
-    items,
-    total,
-    limit: spec.limit,
-    offset: spec.offset,
-    nextCursor: nextOffset < total ? encodeCursor(nextOffset) : null,
-  };
+  return formatQueryPage(page, spec, mapping, total);
 }

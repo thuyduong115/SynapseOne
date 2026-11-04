@@ -16,15 +16,25 @@ import {
   createRole, createPolicy,
   attachPolicy, assignRole, detachPolicy, unassignRole, policiesForUser, useDb, deleteRole, deletePolicy,
   createServiceAccount, listServiceAccounts, getServiceAccount,
-  listRoles, listPolicies, logAudit, listAudit, purgeAudit,
+  listRoles, listPolicies, logAudit, listAudit, queryAudit, purgeAudit,
   getRoleById, getPolicyById, getAccountById, accountsForUser, getOrgById,
   policiesForRole, rolesForUser, ensureTables,
+  setUserPassword, markEmailVerified, storeOneTimeToken, consumeOneTimeToken,
 } from './db';
 import { evaluatePolicies, validatePolicyDocument } from './policy';
-import { signAccess, newRefreshToken, storeRefresh, consumeRefresh, revokeRefresh, revokeAllRefresh, consumeAndRevokeRefresh, findRefreshOwner, refreshExpiry, revokeApiKey, createApiKeyRecord, verifyApiKey, verifyAccess, listApiKeys, findApiKeyById } from './tokens';
-import { secretsEqual } from './db';
+import {
+  signAccess, newRefreshToken, storeRefresh, consumeRefresh, revokeRefresh, revokeAllRefresh,
+  consumeAndRevokeRefresh, findRefreshOwner, refreshExpiry, revokeApiKey, createApiKeyRecord,
+  verifyApiKey, verifyAccess, listApiKeys, findApiKeyById, signDelegated,
+  listRefreshSessions, revokeRefreshById,
+} from './tokens';
+import { secretsEqual, hashCandidates } from './db';
 import { ingestUsageEvents, listUsageEvents, purgeUsage, usageSummary, type UsageFilter } from './usage';
-import { signState, exchangeCode, oidcSettings, OidcError } from './oidc';
+import { assertOidcConfig, isPublicHttpsUrl, signState, exchangeCode, authorizationEndpoint, oidcSettings, OidcError } from './oidc';
+import {
+  hashPassword, verifyPassword, passwordPolicyError, newOneTimeToken,
+  resetTokenExpiry, verifyTokenExpiry, PASSWORD_MAX,
+} from './passwords';
 
 dotenv.config();
 const PORT = Number(process.env.PORT || 4001);
@@ -222,6 +232,117 @@ export function isDemoCallbackEnabled(): boolean {
   if (IS_PROD) return false;
   return (process.env.IAM_ALLOW_OIDC_DEMO_CALLBACK || 'true') === 'true';
 }
+
+/** First-party registration is opt-out; production operators can disable it. */
+export function isRegistrationEnabled(): boolean {
+  return (process.env.IAM_REGISTRATION_ENABLED ?? 'true') !== 'false';
+}
+
+/** Whether self-service registration may create a brand-new organization. */
+export function registrationAllowsNewOrgs(): boolean {
+  return (process.env.IAM_REGISTRATION_ALLOW_NEW_ORGS ?? 'true') !== 'false';
+}
+
+/** Dev-only convenience: return reset/verification tokens in the response
+ *  (there is no mailer wired by default). Never enabled in production. */
+export function exposesLifecycleTokens(): boolean {
+  if (IS_PROD) return false;
+  return (process.env.IAM_EXPOSE_LIFECYCLE_TOKENS ?? 'true') === 'true';
+}
+
+/** Issue an access+refresh pair for a user (login/register/refresh). */
+async function issueSession(user: { id: string; email: string; org_id: string }): Promise<{ accessToken: string; expiresIn: number; refreshToken: string; user: unknown }> {
+  const { token, expiresIn } = signAccess({ sub: user.id, email: user.email, org: user.org_id });
+  const rt = newRefreshToken();
+  await storeRefresh(user.id, rt.hash, refreshExpiry());
+  return { accessToken: token, expiresIn, refreshToken: rt.value, user };
+}
+
+/** Resolve a service identity from a Bearer service-account token or API key.
+ *  User JWTs cannot call the delegated-exchange endpoint. */
+async function resolveServiceIdentity(req: express.Request): Promise<
+  { ok: true; kind: 'service-account' | 'apikey'; id: string; accountId: string; orgId: string | null; scopes: string[] }
+  | { ok: false; error: string; status: number; message: string }
+> {
+  const h = firstHeader(req.headers.authorization as any);
+  if (h.startsWith('Bearer ')) {
+    let claims: any;
+    try {
+      claims = verifyAccess(h.slice(7));
+    } catch {
+      return { ok: false, error: 'invalid_token', status: 401, message: 'Bearer token is invalid or expired' };
+    }
+    if (claims.kind !== 'service-account') {
+      return {
+        ok: false,
+        error: 'exchange_requires_service_credential',
+        status: 403,
+        message: 'Only a service-account token or API key may exchange for a delegated user token',
+      };
+    }
+    if (!claims.account) {
+      return { ok: false, error: 'service_account_unbound', status: 403, message: 'Service account has no account binding' };
+    }
+    const acc = await getAccountById(claims.account);
+    return {
+      ok: true,
+      kind: 'service-account',
+      id: String(claims.sub || ''),
+      accountId: claims.account,
+      orgId: acc?.org_id || null,
+      scopes: Array.isArray(claims.scopes) ? claims.scopes : [],
+    };
+  }
+  const apiKey = firstHeader(req.headers['x-api-key'] as any);
+  if (apiKey) {
+    const rec = await verifyApiKey(apiKey);
+    if (!rec) return { ok: false, error: 'invalid_api_key', status: 401, message: 'API key is invalid or expired' };
+    const acc = await getAccountById(rec.account_id);
+    return {
+      ok: true,
+      kind: 'apikey',
+      id: `apikey:${rec.account_id}`,
+      accountId: rec.account_id,
+      orgId: acc?.org_id || null,
+      scopes: rec.scopes || [],
+    };
+  }
+  return {
+    ok: false,
+    error: 'credential_required',
+    status: 401,
+    message: 'Provide a service-account Bearer token or an X-API-Key',
+  };
+}
+
+function scopesSubset(requested: string[], caller: string[]): boolean {
+  if (caller.includes('*')) return true;
+  return requested.every((s) => caller.includes(s));
+}
+
+/** Effective scopes of the caller: the stamped header (trusted only with the
+ *  internal secret) or the verified credential itself. */
+async function resolveCallerScopes(req: express.Request, trustStamped: boolean): Promise<string[]> {
+  const stamped = firstHeader((req.headers['x-synapseone-scopes'] ?? req.headers['x-synapsedx-scopes']) as any);
+  if (trustStamped && stamped) return stamped.split(',').map((s) => s.trim()).filter(Boolean);
+  const h = firstHeader(req.headers.authorization as any);
+  if (h.startsWith('Bearer ')) {
+    try {
+      return verifyAccess(h.slice(7)).scopes || [];
+    } catch {
+      return [];
+    }
+  }
+  const apiKey = firstHeader(req.headers['x-api-key'] as any);
+  if (apiKey) {
+    try {
+      return (await verifyApiKey(apiKey))?.scopes || [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 /** Tiny in-memory rate limiter (no Redis dep): per-IP token bucket. */
 function rateLimit(max: number, windowMs: number) {
   const hits = new Map<string, { n: number; reset: number }>();
@@ -328,6 +449,8 @@ export function createApp(): express.Express {
     if (!process.env.DATABASE_URL) {
       throw new Error('[iam] DATABASE_URL must be set in production (in-memory fallback would split-brain).');
     }
+    // OIDC must be browser-reachable: public HTTPS issuer + redirect (issue #21).
+    assertOidcConfig();
   }
   const app = express();
   app.disable('x-powered-by');
@@ -374,6 +497,22 @@ export function createApp(): express.Express {
   // Stamped x-synapseone-* headers are trusted ONLY when the secret is set:
   // without it, direct callers could spoof any tenant header (dev default).
   const TRUST_STAMPED = INTERNAL_SECRET.length > 0;
+/** Fire-and-forget mutation audit trail (#32), scoped to the caller's org. */
+async function auditMutation(req: express.Request, action: string, resource: string, extra: Record<string, unknown> = {}): Promise<void> {
+  const [org, user] = await Promise.all([
+    resolveCallerOrg(req, TRUST_STAMPED),
+    resolveCallerUser(req, TRUST_STAMPED),
+  ]);
+  await logAudit({
+    actor_type: user ? 'user' : 'service',
+    actor_id: user || '',
+    action,
+    resource,
+    decision: true,
+    context: { ...(org ? { org } : {}), ...(user ? { callerUser: user } : {}), ...extra },
+  }).catch(() => undefined);
+}
+
   // Audit retention (opt-in): hourly purge of rows older than N days.
   // Default 0 = disabled (zero behavior change); prod sets e.g. 180.
   const RETENTION_DAYS = (() => {
@@ -414,9 +553,9 @@ export function createApp(): express.Express {
   app.use(((req: express.Request, res: express.Response, next: express.NextFunction) => {
     const p = req.path;
     if (p === '/health' || PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p.startsWith(x))) return next();
-    // Gateway telemetry ingest: authenticated by the shared internal secret in
-    // the handler itself (it has no end-user Bearer/API key to present).
-    if (p === '/v1/usage/ingest') return next();
+    // Gateway telemetry + data-plane audit ingest: authenticated by the shared
+    // internal secret in the handler itself (no end-user credential).
+    if (p === '/v1/usage/ingest' || p === '/v1/audit/ingest') return next();
     if (INTERNAL_SECRET) {
       const got = firstHeader((req.headers['x-synapseone-internal'] ?? req.headers['x-synapsedx-internal']) as any);
       if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
@@ -500,18 +639,37 @@ export function createApp(): express.Express {
       redirectUri: cfg.redirectUri,
       provider: cfg.provider,
       codeExchange: true,
+      // Whether a browser can actually reach the configured IdP (public HTTPS).
+      issuerPublic: isPublicHttpsUrl(cfg.issuer),
       demoCallback: isDemoCallbackEnabled(),
       note: 'Federated OIDC upstream. IAM keeps the shadow user + org/account/role/policy authorization.',
     });
   });
 
-  app.get('/v1/auth/oidc/start', (req, res) => {
+  app.get('/v1/auth/oidc/start', async (req, res) => {
     const cfg = oidcSettings();
     const org = typeof req.query.org === 'string' && /^[a-z0-9-]{1,64}$/.test(req.query.org) ? req.query.org : 'acme';
     // HMAC-signed state binds the org + a 10-minute expiry (verified in /callback).
     const state = signState(org);
-    const url = `${cfg.issuer.replace(/\/*$/, '')}/authorize?client_id=${encodeURIComponent(cfg.clientId)}&response_type=code&scope=${encodeURIComponent('openid email profile')}&redirect_uri=${encodeURIComponent(cfg.redirectUri)}&state=${state}`;
-    res.json({ authorizeUrl: url, state });
+    try {
+      // Use the IdP's discovery document instead of guessing `<issuer>/authorize`;
+      // this validates the endpoint (https + issuer origin in production).
+      const endpoint = await authorizationEndpoint(cfg.issuer);
+      const params = new URLSearchParams({
+        client_id: cfg.clientId,
+        response_type: 'code',
+        scope: 'openid email profile',
+        redirect_uri: cfg.redirectUri,
+        state,
+      });
+      const sep = endpoint.includes('?') ? '&' : '?';
+      res.json({ authorizeUrl: `${endpoint}${sep}${params.toString()}`, state });
+    } catch (e: any) {
+      if (e instanceof OidcError) {
+        return res.status(e.status).json({ error: e.code, message: e.message, issuer: cfg.issuer });
+      }
+      res.status(502).json({ error: 'oidc_discovery_failed', message: e?.message || String(e), issuer: cfg.issuer });
+    }
   });
 
   // Callback: two modes.
@@ -582,27 +740,344 @@ export function createApp(): express.Express {
     }
   });
 
-  // Dev login: cấp token trực tiếp theo email. TẮT ở production bằng
-  // IAM_ALLOW_DEV_LOGIN=false (khi đó chỉ còn OIDC callback + refresh).
+  // Login supports three paths:
+  //  1. email + password (first-party credential; works in production),
+  //  2. email only when IAM_ALLOW_DEV_LOGIN=true (dev/test passwordless),
+  //  3. OIDC code exchange (see /v1/auth/oidc/callback).
   app.post('/v1/auth/login', async (req, res) => {
-    if (!isDevLoginEnabled()) {
-      return res.status(403).json({ error: 'dev_login_disabled', message: 'Use OIDC flow' });
+    const schema = z.object({
+      email: z.string().trim().toLowerCase().email().max(320),
+      password: z.string().max(PASSWORD_MAX).optional(),
+      orgSlug: z.string().trim().regex(/^[a-z0-9-]{1,64}$/).nullish(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const { email, password, orgSlug } = parsed.data;
+    const slug = orgSlug || 'acme';
+
+    if (password !== undefined) {
+      const org = await getOrgBySlug(slug);
+      const user = org ? await findUserByOrgEmail(org.id, email) : null;
+      // Constant-ish work for unknown users; never reveal whether the account exists.
+      const ok = user ? await verifyPassword(password, user.password_hash) : false;
+      if (!user || !ok) {
+        await logAudit({
+          actor_type: 'user', actor_id: user?.id || '', action: 'iam:auth:login', resource: `org:${org?.id || slug}`,
+          decision: false, context: { method: 'password', email, ...(org ? { org: org.id } : {}) },
+        }).catch(() => undefined);
+        return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect' });
+      }
+      const session = await issueSession(user);
+      await logAudit({
+        actor_type: 'user', actor_id: user.id, action: 'iam:auth:login', resource: `org:${user.org_id}`,
+        decision: true, context: { method: 'password', org: user.org_id },
+      }).catch(() => undefined);
+      noStore(res);
+      return res.json(session);
     }
+
+    if (!isDevLoginEnabled()) {
+      return res.status(403).json({
+        error: 'dev_login_disabled',
+        message: 'Passwordless dev login is disabled. Use email+password or the OIDC flow.',
+      });
+    }
+    const org = (await getOrgBySlug(slug)) || (await createOrganization(slug, slug));
+    const user = await upsertUser(org.id, email, email);
+    const session = await issueSession(user);
+    noStore(res);
+    res.json(session);
+  });
+
+  // ---------- First-party credential lifecycle (#22) ----------
+  app.post('/v1/auth/register', async (req, res) => {
+    if (!isRegistrationEnabled()) {
+      return res.status(403).json({ error: 'registration_disabled', message: 'Self-service registration is disabled. Ask an admin to invite you or use OIDC.' });
+    }
+    const schema = z.object({
+      email: z.string().trim().toLowerCase().email().max(320),
+      password: z.string().min(1).max(PASSWORD_MAX),
+      displayName: z.string().trim().max(200).nullish(),
+      orgSlug: z.string().trim().regex(/^[a-z0-9-]{1,64}$/).nullish(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const { email, password, displayName, orgSlug } = parsed.data;
+    const policyErr = passwordPolicyError(password, email);
+    if (policyErr) return res.status(400).json({ error: 'weak_password', message: policyErr });
+    const slug = orgSlug || 'acme';
+
+    let org = await getOrgBySlug(slug);
+    if (!org) {
+      if (!registrationAllowsNewOrgs()) {
+        return res.status(403).json({ error: 'unknown_org', message: 'Organization does not exist and self-service org creation is disabled' });
+      }
+      try {
+        org = await createOrganization(slug, slug);
+      } catch (e: any) {
+        org = await getOrgBySlug(slug);
+        if (!org) throw e;
+      }
+    } else {
+      // Joining an EXISTING org requires an invitation (an existing user row):
+      // org membership grants org-wide access, so this must never be
+      // self-service by guessing a slug (same rule as the OIDC callback).
+      const existing = await findUserByOrgEmail(org.id, email);
+      if (!existing) {
+        return res.status(403).json({
+          error: 'org_membership_required',
+          message: 'Your email is not invited to this organization. Ask an admin to invite you, or choose a new organization slug.',
+        });
+      }
+    }
+    const existing = await findUserByOrgEmail(org.id, email);
+    if (existing?.password_hash) {
+      return res.status(409).json({ error: 'account_exists', message: 'An account with this email already has a password. Sign in or reset it.' });
+    }
+    const user = await upsertUser(org.id, email, displayName || email);
+    await setUserPassword(user.id, await hashPassword(password));
+    const verify = newOneTimeToken('verify');
+    await storeOneTimeToken(user.id, verify.hash, 'verify', verifyTokenExpiry());
+    const session = await issueSession(user);
+    await logAudit({
+      actor_type: 'user', actor_id: user.id, action: 'iam:user:register', resource: `org:${org.id}`,
+      decision: true, context: { org: org.id, email },
+    }).catch(() => undefined);
+    noStore(res);
+    res.status(201).json({
+      ...session,
+      user: { ...(session.user as any), email_verified: false },
+      ...(exposesLifecycleTokens() ? { emailVerificationToken: verify.value } : {}),
+    });
+  });
+
+  app.post('/v1/auth/password/change', async (req, res) => {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'unauthorized', message: 'Bearer token required' });
+    let claims: any;
+    try {
+      claims = verifyAccess(h.slice(7));
+    } catch {
+      return res.status(401).json({ error: 'invalid_token' });
+    }
+    if (claims.kind && claims.kind !== 'user') {
+      return res.status(403).json({ error: 'password_change_requires_user', message: 'Only a user account can change a password' });
+    }
+    const schema = z.object({ currentPassword: z.string().max(PASSWORD_MAX), newPassword: z.string().max(PASSWORD_MAX) });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const user = await getUserById(claims.sub);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    if (!user.password_hash) {
+      return res.status(409).json({ error: 'password_not_set', message: 'This account has no password (OIDC or dev login). Use reset to set one.' });
+    }
+    if (!(await verifyPassword(parsed.data.currentPassword, user.password_hash))) {
+      return res.status(401).json({ error: 'invalid_credentials', message: 'Current password is incorrect' });
+    }
+    const policyErr = passwordPolicyError(parsed.data.newPassword, user.email);
+    if (policyErr) return res.status(400).json({ error: 'weak_password', message: policyErr });
+    await setUserPassword(user.id, await hashPassword(parsed.data.newPassword));
+    const revoked = await revokeAllRefresh(user.id);
+    await logAudit({
+      actor_type: 'user', actor_id: user.id, action: 'iam:password:change', resource: `user:${user.id}`,
+      decision: true, context: { org: user.org_id, revokedSessions: revoked },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({ ok: true, revokedSessions: revoked });
+  });
+
+  app.post('/v1/auth/password/forgot', async (req, res) => {
     const schema = z.object({
       email: z.string().trim().toLowerCase().email().max(320),
       orgSlug: z.string().trim().regex(/^[a-z0-9-]{1,64}$/).nullish(),
     });
     const parsed = schema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
-    const { email, orgSlug } = parsed.data;
-    const slug = orgSlug || 'acme';
-    const org = (await getOrgBySlug(slug)) || (await createOrganization(slug, slug));
-    const user = await upsertUser(org.id, email, email);
-    const { token, expiresIn } = signAccess({ sub: user.id, email: user.email, org: org.id });
-    const rt = newRefreshToken();
-    await storeRefresh(user.id, rt.hash, refreshExpiry());
+    // Always 202: never reveal whether the account exists.
+    if (!parsed.success) return res.status(202).json({ ok: true });
+    const org = await getOrgBySlug(parsed.data.orgSlug || 'acme');
+    const user = org ? await findUserByOrgEmail(org.id, parsed.data.email) : null;
+    let token: string | undefined;
+    if (user?.password_hash) {
+      const t = newOneTimeToken('reset');
+      await storeOneTimeToken(user.id, t.hash, 'reset', resetTokenExpiry());
+      token = t.value;
+      await logAudit({
+        actor_type: 'user', actor_id: user.id, action: 'iam:password:forgot', resource: `user:${user.id}`,
+        decision: true, context: { org: user.org_id },
+      }).catch(() => undefined);
+    }
     noStore(res);
-    res.json({ accessToken: token, expiresIn, refreshToken: rt.value, user });
+    res.status(202).json({ ok: true, ...(token && exposesLifecycleTokens() ? { resetToken: token } : {}) });
+  });
+
+  app.post('/v1/auth/password/reset', async (req, res) => {
+    const schema = z.object({
+      token: z.string().min(10).max(512),
+      newPassword: z.string().min(1).max(PASSWORD_MAX),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    let userId: string | null = null;
+    for (const hash of hashCandidates(parsed.data.token)) {
+      userId = await consumeOneTimeToken(hash, 'reset');
+      if (userId) break;
+    }
+    if (!userId) return res.status(400).json({ error: 'invalid_reset_token', message: 'Reset token is invalid, expired or already used' });
+    const user = await getUserById(userId);
+    if (!user) return res.status(400).json({ error: 'invalid_reset_token' });
+    const policyErr = passwordPolicyError(parsed.data.newPassword, user.email);
+    if (policyErr) return res.status(400).json({ error: 'weak_password', message: policyErr });
+    await setUserPassword(user.id, await hashPassword(parsed.data.newPassword));
+    const revoked = await revokeAllRefresh(user.id);
+    await logAudit({
+      actor_type: 'user', actor_id: user.id, action: 'iam:password:reset', resource: `user:${user.id}`,
+      decision: true, context: { org: user.org_id, revokedSessions: revoked },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({ ok: true, revokedSessions: revoked });
+  });
+
+  app.post('/v1/auth/email/verify', async (req, res) => {
+    const token = typeof (req.body || {}).token === 'string' ? (req.body || {}).token : '';
+    if (!token) return res.status(400).json({ error: 'token_required' });
+    let userId: string | null = null;
+    for (const hash of hashCandidates(token)) {
+      userId = await consumeOneTimeToken(hash, 'verify');
+      if (userId) break;
+    }
+    if (!userId) return res.status(400).json({ error: 'invalid_verify_token', message: 'Verification token is invalid, expired or already used' });
+    await markEmailVerified(userId);
+    noStore(res);
+    res.json({ ok: true, emailVerified: true });
+  });
+
+  app.post('/v1/auth/email/verify/request', async (req, res) => {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'unauthorized' });
+    let claims: any;
+    try {
+      claims = verifyAccess(h.slice(7));
+    } catch {
+      return res.status(401).json({ error: 'invalid_token' });
+    }
+    const user = await getUserById(claims.sub);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    if (user.email_verified) return res.json({ ok: true, emailVerified: true });
+    const t = newOneTimeToken('verify');
+    await storeOneTimeToken(user.id, t.hash, 'verify', verifyTokenExpiry());
+    noStore(res);
+    res.json({ ok: true, ...(exposesLifecycleTokens() ? { emailVerificationToken: t.value } : {}) });
+  });
+
+  app.get('/v1/auth/sessions', async (req, res) => {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'unauthorized' });
+    let claims: any;
+    try {
+      claims = verifyAccess(h.slice(7));
+    } catch {
+      return res.status(401).json({ error: 'invalid_token' });
+    }
+    const sessions = await listRefreshSessions(claims.sub);
+    noStore(res);
+    res.json(sessions);
+  });
+
+  app.delete('/v1/auth/sessions/:id', async (req, res) => {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'unauthorized' });
+    let claims: any;
+    try {
+      claims = verifyAccess(h.slice(7));
+    } catch {
+      return res.status(401).json({ error: 'invalid_token' });
+    }
+    if (!isUuid(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+    const ok = await revokeRefreshById(claims.sub, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'session_not_found' });
+    res.json({ ok: true });
+  });
+
+  /**
+   * Delegated token exchange (issue #22): a Tier-2 service credential gets a
+   * short-lived token bound to one user/org/account, with an audience and a
+   * scopes subset. Cross-tenant targets are refused and every exchange is
+   * audit-logged.
+   */
+  app.post('/v1/auth/exchange', async (req, res) => {
+    const caller = await resolveServiceIdentity(req);
+    if (!caller.ok) return res.status(caller.status).json({ error: caller.error, message: caller.message });
+    const schema = z.object({
+      userId: z.string().uuid(),
+      accountId: z.string().uuid().nullish(),
+      orgId: z.string().uuid().nullish(),
+      scopes: z.array(z.string().min(1).max(200)).max(100).optional(),
+      audience: z.string().min(1).max(200).nullish(),
+      ttlSeconds: z.number().int().min(60).max(3600).optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const { userId, accountId, orgId, scopes: requested, audience, ttlSeconds } = parsed.data;
+
+    const user = await getUserById(userId);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+
+    // Target tenant binding: the caller's account/org decides what is reachable.
+    const account = await getAccountById(accountId || caller.accountId);
+    if (!account) return res.status(404).json({ error: 'account_not_found' });
+    if (caller.orgId && account.org_id !== caller.orgId) {
+      return res.status(403).json({ error: 'cross_tenant', message: 'Target account belongs to another organization' });
+    }
+    if (orgId && orgId !== account.org_id) {
+      return res.status(403).json({ error: 'cross_tenant', message: 'orgId does not match the target account' });
+    }
+    if (user.org_id !== account.org_id) {
+      return res.status(403).json({ error: 'cross_tenant', message: 'Target user belongs to another organization' });
+    }
+
+    const scopes = requested === undefined ? caller.scopes.slice() : requested;
+    if (!scopesSubset(scopes, caller.scopes)) {
+      return res.status(403).json({ error: 'scope_escalation', message: 'Cannot delegate scopes the caller does not hold' });
+    }
+
+    const { token, expiresIn } = signDelegated({
+      userId: user.id,
+      org: user.org_id,
+      account: account.id,
+      scopes,
+      actor: caller.id,
+      actorKind: caller.kind,
+      audience: audience || undefined,
+      ttlSeconds,
+    });
+    await logAudit({
+      actor_type: caller.kind,
+      actor_id: caller.id,
+      action: 'iam:token:exchange',
+      resource: `user:${user.id}`,
+      decision: true,
+      context: {
+        org: user.org_id,
+        callerOrg: caller.orgId || user.org_id,
+        account: account.id,
+        targetUser: user.id,
+        scopes,
+        ...(audience ? { audience } : {}),
+        ttlSeconds: expiresIn,
+      },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({
+      accessToken: token,
+      expiresIn,
+      tokenType: 'Bearer',
+      delegated: true,
+      userId: user.id,
+      orgId: user.org_id,
+      accountId: account.id,
+      scopes,
+      ...(audience ? { audience } : {}),
+    });
   });
 
   // Refresh xoay vòng NGUYÊN TỬ: consume+revoke 1 bước → replay/race đều rớt.
@@ -692,7 +1167,9 @@ export function createApp(): express.Express {
         displayName: z.string().trim().min(2).max(200),
       });
       const b = schema.parse(req.body);
-      res.status(201).json(await createOrganization(sanitizeName(b.slug, 64), sanitizeName(b.displayName)));
+      const created = await createOrganization(sanitizeName(b.slug, 64), sanitizeName(b.displayName));
+      await auditMutation(req, 'iam:org:create', `org:${created.id}`, { slug: created.slug });
+      res.status(201).json(created);
     } catch (e: any) {
       if (e?.code === '23505' || e?.status === 409) {
         return res.status(409).json({ error: 'conflict', message: 'organization slug exists' });
@@ -723,7 +1200,9 @@ export function createApp(): express.Express {
       if (!(await canActForOrg(req, TRUST_STAMPED, req.params.orgId))) {
         return res.status(403).json({ error: 'forbidden', message: 'organization belongs to another tenant' });
       }
-      res.status(201).json(await createAccount(req.params.orgId, b.slug, sanitizeName(b.displayName)));
+      const created = await createAccount(req.params.orgId, b.slug, sanitizeName(b.displayName));
+      await auditMutation(req, 'iam:account:create', `account:${created.id}`, { org: req.params.orgId, slug: created.slug });
+      res.status(201).json(created);
     } catch (e: any) {
       if (e?.code === '23505' || e?.status === 409) {
         return res.status(409).json({ error: 'conflict', message: 'account slug exists' });
@@ -748,7 +1227,9 @@ export function createApp(): express.Express {
     if (!(await canActForOrg(req, TRUST_STAMPED, req.params.orgId))) {
       return res.status(403).json({ error: 'forbidden', message: 'organization belongs to another tenant' });
     }
-    res.status(201).json(await upsertUser(req.params.orgId, email, displayName ? sanitizeName(displayName) : undefined));
+    const created = await upsertUser(req.params.orgId, email, displayName ? sanitizeName(displayName) : undefined);
+    await auditMutation(req, 'iam:user:create', `user:${created.id}`, { org: req.params.orgId, email });
+    res.status(201).json(created);
   });
 
   app.get('/v1/orgs/:orgId/users', async (req, res) => {
@@ -777,7 +1258,9 @@ export function createApp(): express.Express {
     if (!(await canActForAccount(req, TRUST_STAMPED, req.params.accountId))) {
       return res.status(403).json({ error: 'forbidden', message: 'account belongs to another tenant' });
     }
-    res.status(201).json(await createRole(req.params.accountId, slug, sanitizeName(description || '')));
+    const created = await createRole(req.params.accountId, slug, sanitizeName(description || ''));
+    await auditMutation(req, 'iam:role:create', `role:${created.id}`, { account: req.params.accountId, slug });
+    res.status(201).json(created);
   });
 
   app.get('/v1/accounts/:accountId/roles', async (req, res) => {
@@ -810,6 +1293,7 @@ export function createApp(): express.Express {
     }
     const ok = await deleteRole(req.params.roleId);
     if (!ok) return res.status(404).json({ error: 'role_not_found' });
+    await auditMutation(req, 'iam:role:delete', `role:${req.params.roleId}`, { account: role.account_id });
     res.json({ ok: true });
   });
 
@@ -826,7 +1310,9 @@ export function createApp(): express.Express {
     if (!(await canActForAccount(req, TRUST_STAMPED, req.params.accountId))) {
       return res.status(403).json({ error: 'forbidden', message: 'account belongs to another tenant' });
     }
-    res.status(201).json(await createPolicy(req.params.accountId, slug, sanitizeName(description || ''), document));
+    const created = await createPolicy(req.params.accountId, slug, sanitizeName(description || ''), document);
+    await auditMutation(req, 'iam:policy:create', `policy:${created.id}`, { account: req.params.accountId, slug });
+    res.status(201).json(created);
   });
 
   app.get('/v1/accounts/:accountId/policies', async (req, res) => {
@@ -848,6 +1334,7 @@ export function createApp(): express.Express {
     }
     const ok = await deletePolicy(req.params.policyId);
     if (!ok) return res.status(404).json({ error: 'policy_not_found' });
+    await auditMutation(req, 'iam:policy:delete', `policy:${req.params.policyId}`, { account: pol.account_id });
     res.json({ ok: true });
   });
 
@@ -868,6 +1355,7 @@ export function createApp(): express.Express {
       return res.status(403).json({ error: 'forbidden', message: 'role belongs to another tenant' });
     }
     await attachPolicy(req.params.roleId, req.body.policyId);
+    await auditMutation(req, 'iam:policy:attach', `role:${req.params.roleId}`, { policyId: req.body.policyId, account: role.account_id });
     res.json({ ok: true });
   });
   app.delete('/v1/roles/:roleId/policies/:policyId', async (req, res) => {
@@ -881,6 +1369,7 @@ export function createApp(): express.Express {
       return res.status(403).json({ error: 'forbidden', message: 'role belongs to another tenant' });
     }
     await detachPolicy(req.params.roleId, req.params.policyId);
+    await auditMutation(req, 'iam:policy:detach', `role:${req.params.roleId}`, { policyId: req.params.policyId, account: role.account_id });
     res.json({ ok: true });
   });
   app.post('/v1/users/:userId/assign', async (req, res) => {
@@ -901,6 +1390,7 @@ export function createApp(): express.Express {
       return res.status(403).json({ error: 'forbidden', message: 'user belongs to another tenant' });
     }
     await assignRole(req.params.userId, req.body.roleId);
+    await auditMutation(req, 'iam:role:assign', `user:${req.params.userId}`, { roleId: req.body.roleId, org: user.org_id });
     res.json({ ok: true });
   });
   app.delete('/v1/users/:userId/roles/:roleId', async (req, res) => {
@@ -914,6 +1404,7 @@ export function createApp(): express.Express {
       return res.status(403).json({ error: 'forbidden', message: 'user belongs to another tenant' });
     }
     await unassignRole(req.params.userId, req.params.roleId);
+    await auditMutation(req, 'iam:role:unassign', `user:${req.params.userId}`, { roleId: req.params.roleId, org: user.org_id });
     res.json({ ok: true });
   });
 
@@ -929,15 +1420,22 @@ export function createApp(): express.Express {
     }
     const docs = await policiesForUser(userId);
     const user = await getUserById(userId);
-    const ctx = { ...capContext(context), user: userId, org: user?.org_id, email: user?.email };
-    const verdict = evaluatePolicies(docs, { action, resource }, ctx);
-    // Audit rows carry the caller identity too (#7) so org-scoped /v1/audit
-    // can show callers the requests they triggered (evaluation ctx unchanged).
     const callerOrg = await resolveCallerOrg(req, TRUST_STAMPED);
     const callerUser = await resolveCallerUser(req, TRUST_STAMPED);
+    // Target-tenant guard (#23): never evaluate (or audit-log) a user outside
+    // the caller's organization. Machine credentials have no org → refused.
+    if (!callerOrg) {
+      return res.status(403).json({ error: 'forbidden', message: 'authorize requires an organization context' });
+    }
+    if (!user || user.org_id !== callerOrg) {
+      return res.status(403).json({ error: 'cross_tenant', message: 'target user belongs to another tenant' });
+    }
+    const ctx = { ...capContext(context), user: userId, org: user.org_id, email: user.email };
+    const verdict = evaluatePolicies(docs, { action, resource }, ctx);
+    // Audit rows are scoped to the CALLER's org, never the target's (#23).
     await logAudit({
       actor_type: 'user', actor_id: userId, action, resource, decision: verdict.allowed,
-      context: { ...ctx, ...(callerOrg ? { callerOrg } : {}), ...(callerUser ? { callerUser } : {}) },
+      context: { ...ctx, callerOrg, ...(callerUser ? { callerUser } : {}) },
     }).catch(() => undefined);
     res.json({ allowed: verdict.allowed, matchedBy: verdict.matchedBy, evaluatedPolicies: docs.length });
   });
@@ -974,15 +1472,36 @@ export function createApp(): express.Express {
   // dry-runs). Callers without an org (machine tokens) see nothing.
   app.get('/v1/audit', async (req, res) => {
     const limit = Number(req.query.limit || 50);
+    const offset = Number(req.query.offset || 0);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      return res.status(400).json({ error: 'invalid_limit', message: 'limit must be an integer 1..200' });
+    }
+    if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) {
+      return res.status(400).json({ error: 'invalid_offset', message: 'offset must be an integer 0..100000' });
+    }
     const actor = (req.query.actor as string) || undefined;
+    if (actor !== undefined && !isUuid(actor)) return res.status(400).json({ error: 'invalid_actor', message: 'actor must be a UUID' });
     const rawAllowed = req.query.allowed;
     const allowed = rawAllowed === undefined ? undefined : String(rawAllowed).toLowerCase() === 'true';
     if (rawAllowed !== undefined && !['true', 'false'].includes(String(rawAllowed).toLowerCase())) {
       return res.status(400).json({ error: 'invalid_allowed', message: 'allowed must be true or false' });
     }
+    const action = typeof req.query.action === 'string' && req.query.action.trim() ? req.query.action.trim().slice(0, 200) : undefined;
+    const resource = typeof req.query.resource === 'string' && req.query.resource.trim() ? req.query.resource.trim().slice(0, 512) : undefined;
+    const parseTime = (v: unknown): Date | undefined | 'invalid' => {
+      if (v === undefined || v === '') return undefined;
+      const d = new Date(String(v));
+      return Number.isFinite(d.getTime()) ? d : 'invalid';
+    };
+    const from = parseTime(req.query.from);
+    const to = parseTime(req.query.to);
+    if (from === 'invalid' || to === 'invalid') {
+      return res.status(400).json({ error: 'invalid_time', message: 'from/to must be valid ISO timestamps' });
+    }
     const org = await resolveCallerOrg(req, TRUST_STAMPED);
     if (!org) return res.json([]);
-    res.json(await listAudit(limit, actor, allowed, org));
+    noStore(res);
+    res.json(await queryAudit({ limit, offset, actor, allowed, orgId: org, action, resource, from, to }));
   });
 
   // ---------- API keys ----------
@@ -998,7 +1517,8 @@ export function createApp(): express.Express {
     if (typeof keyName !== 'string' || keyName.length === 0 || keyName.length > 100) {
       return res.status(400).json({ error: 'invalid_name', message: 'name must be 1..100 chars' });
     }
-    const keyScopes: string[] = scopes || ['*'];
+    // Least privilege by default: an omitted scope list is read-only, never '*'.
+    const keyScopes: string[] = scopes ?? ['*:read'];
     if (!Array.isArray(keyScopes) || keyScopes.length === 0 || keyScopes.length > 100 ||
         keyScopes.some((s) => typeof s !== 'string' || s.length === 0 || s.length > 200)) {
       return res.status(400).json({ error: 'invalid_scopes', message: 'scopes must be 1..100 non-empty strings ≤200 chars' });
@@ -1012,7 +1532,26 @@ export function createApp(): express.Express {
     if (!(await canActForAccount(req, TRUST_STAMPED, req.params.accountId))) {
       return res.status(403).json({ error: 'forbidden', message: 'account belongs to another tenant' });
     }
+    // Scope narrowing (#23): a credential can never mint authority it lacks.
+    const callerScopes = await resolveCallerScopes(req, TRUST_STAMPED);
+    if (!scopesSubset(keyScopes, callerScopes)) {
+      return res.status(403).json({ error: 'scope_escalation', message: 'Cannot mint scopes the caller does not hold' });
+    }
+    // An optional userId binding must live in the key's account org.
+    if (userId != null) {
+      const target = await getUserById(userId);
+      const acc = await getAccountById(req.params.accountId);
+      if (!target || !acc || target.org_id !== acc.org_id) {
+        return res.status(403).json({ error: 'cross_tenant', message: 'userId is outside the account organization' });
+      }
+    }
     const k = await createApiKeyRecord(req.params.accountId, userId || null, keyName, keyScopes, exp);
+    await logAudit({
+      actor_type: 'user', actor_id: (await resolveCallerUser(req, TRUST_STAMPED)) || '',
+      action: 'iam:key:create', resource: `account:${req.params.accountId}`,
+      decision: true,
+      context: { org: (await resolveCallerOrg(req, TRUST_STAMPED)) || undefined, account: req.params.accountId, keyId: k.id, scopes: keyScopes },
+    }).catch(() => undefined);
     res.status(201).json({ id: k.id, apiKey: k.value, prefix: k.prefix, warning: 'Save this apiKey now — it is shown only once.' });
   });
 
@@ -1029,7 +1568,9 @@ export function createApp(): express.Express {
 
   app.post('/v1/keys/verify', async (req, res) => {    const rec = await verifyApiKey((req.body || {}).apiKey || '');
     if (!rec) return res.status(401).json({ valid: false });
-    res.json({ valid: true, ...rec });
+    // Include the owning org: the gateway uses this for usage attribution (#28).
+    const acc = rec.account_id ? await getAccountById(rec.account_id) : null;
+    res.json({ valid: true, ...rec, ...(acc?.org_id ? { org_id: acc.org_id } : {}) });
   });
 
   app.delete('/v1/keys/:id', async (req, res) => {
@@ -1041,6 +1582,7 @@ export function createApp(): express.Express {
     }
     const ok = await revokeApiKey(req.params.id);
     if (!ok) return res.status(404).json({ error: 'key_not_found' });
+    await auditMutation(req, 'iam:key:revoke', `key:${req.params.id}`, { account: rec.account_id });
     res.json({ ok: true });
   });
 
@@ -1059,7 +1601,9 @@ export function createApp(): express.Express {
     if (!(await canActForAccount(req, TRUST_STAMPED, req.params.accountId))) {
       return res.status(403).json({ error: 'forbidden', message: 'account belongs to another tenant' });
     }
-    res.status(201).json(await createServiceAccount(req.params.accountId, slug, sanitizeName(description || '')));
+    const created = await createServiceAccount(req.params.accountId, slug, sanitizeName(description || ''));
+    await auditMutation(req, 'iam:service-account:create', `service-account:${created.id}`, { account: req.params.accountId, slug });
+    res.status(201).json(created);
   });
 
   app.get('/v1/accounts/:accountId/service-accounts', async (req, res) => {
@@ -1124,6 +1668,7 @@ export function createApp(): express.Express {
       return res.status(403).json({ error: 'scope_escalation', message: 'Cannot mint scopes the caller does not hold' });
     }
     const { token, expiresIn } = signAccess({ sub: sa.id, account: sa.account_id, scopes, kind: 'service-account' });
+    await auditMutation(req, 'iam:token:mint', `service-account:${sa.id}`, { account: sa.account_id, scopes });
     noStore(res);
     res.json({ accessToken: token, expiresIn, serviceAccount: sa });
   });
@@ -1152,6 +1697,99 @@ export function createApp(): express.Express {
     res.json(await rolesForUser(req.params.userId));
   });
 
+  // ---------- Data-plane mutation audit ingest (#32) ----------
+  // Internal services post one event per write. Tenant identity comes from the
+  // gateway-stamped headers those services received; the shared internal secret
+  // authenticates the producer. Context is sanitised so a producer cannot spoof
+  // the org/callerOrg scoping keys or smuggle unbounded payloads.
+  const AUDIT_RESERVED_CONTEXT = new Set(['org', 'callerOrg', 'account', 'actor', 'actorId']);
+  const AUDIT_SENSITIVE_KEY = /(pass|secret|token|key|credential|auth|email|phone|session)/i;
+  function sanitizeAuditContext(input: unknown): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+    let count = 0;
+    for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+      if (count >= 20) break;
+      const key = String(rawKey).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64);
+      if (!key || AUDIT_RESERVED_CONTEXT.has(key)) continue;
+      if (AUDIT_SENSITIVE_KEY.test(key)) {
+        out[key] = '***';
+        count++;
+        continue;
+      }
+      if (rawValue === null || ['string', 'number', 'boolean'].includes(typeof rawValue)) {
+        out[key] = typeof rawValue === 'string' ? rawValue.slice(0, 256) : rawValue;
+        count++;
+        continue;
+      }
+      // One level of nesting (the audit client sends `params: {id, collection}`).
+      if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+        const nested: Record<string, string> = {};
+        let nestedCount = 0;
+        for (const [nk, nv] of Object.entries(rawValue as Record<string, unknown>)) {
+          if (nestedCount >= 20) break;
+          const cleanKey = String(nk).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 32);
+          if (!cleanKey || ['string', 'number', 'boolean'].includes(typeof nv) === false && nv !== null) continue;
+          nested[cleanKey] = AUDIT_SENSITIVE_KEY.test(cleanKey) ? '***' : String(nv ?? '').slice(0, 128);
+          nestedCount++;
+        }
+        out[key] = nested;
+        count++;
+      }
+    }
+    return out;
+  }
+
+  const auditIngestSchema = z.object({
+    events: z.array(z.object({
+      actorType: z.enum(['user', 'service', 'apikey', 'anonymous']),
+      actorId: z.string().max(320).optional().default(''),
+      orgId: z.string().max(128).regex(/^[A-Za-z0-9._:@+-]*$/).nullish(),
+      accountId: z.string().max(128).regex(/^[A-Za-z0-9._:@+-]*$/).nullish(),
+      action: z.string().min(1).max(200),
+      resource: z.string().max(512).optional().default(''),
+      result: z.enum(['allowed', 'denied', 'error']),
+      statusCode: z.number().int().min(100).max(599),
+      requestId: z.string().max(128).optional().default(''),
+      context: z.record(z.unknown()).optional(),
+    })).min(1).max(200),
+  });
+  app.post('/v1/audit/ingest', async (req, res) => {
+    if (INTERNAL_SECRET) {
+      const got = firstHeader((req.headers['x-synapseone-internal'] ?? req.headers['x-synapsedx-internal']) as any);
+      if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
+        return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid internal credential' });
+      }
+    }
+    const parsed = auditIngestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    }
+    let accepted = 0;
+    for (const e of parsed.data.events) {
+      const org = e.orgId || null;
+      await logAudit({
+        actor_type: e.actorType,
+        actor_id: e.actorId || '',
+        action: e.action,
+        resource: e.resource || '',
+        // `decision` is the historical boolean; `result` keeps denied vs error.
+        decision: e.result === 'allowed',
+        context: {
+          ...(org ? { org } : {}),
+          ...(e.accountId ? { account: e.accountId } : {}),
+          ...(e.requestId ? { requestId: e.requestId } : {}),
+          result: e.result,
+          statusCode: e.statusCode,
+          ...sanitizeAuditContext(e.context),
+        },
+      }).catch(() => undefined);
+      accepted++;
+    }
+    noStore(res);
+    res.status(202).json({ ok: true, accepted });
+  });
+
   // ---------- Usage analytics (gateway request telemetry) ----------
   // Machine-to-machine ingest. The general auth gate is bypassed for this path
   // (the gateway has no user credential); the shared internal secret is the
@@ -1173,6 +1811,10 @@ export function createApp(): express.Express {
           orgId: z.string().uuid().nullish(),
           accountId: z.string().uuid().nullish(),
           userId: z.string().uuid().nullish(),
+          promptTokens: z.number().int().min(0).max(100_000_000).nullish(),
+          completionTokens: z.number().int().min(0).max(100_000_000).nullish(),
+          totalTokens: z.number().int().min(0).max(200_000_000).nullish(),
+          model: z.string().max(200).nullish(),
           error: z.string().max(500).nullish(),
         }),
       )

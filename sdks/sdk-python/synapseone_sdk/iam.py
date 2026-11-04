@@ -33,6 +33,98 @@ class IamService:
             "POST", "/v1/auth/login", {"email": email, "orgSlug": org_slug}
         )
 
+    def register(
+        self,
+        email: str,
+        password: str,
+        org_slug: str = "acme",
+        display_name: str | None = None,
+    ) -> dict:
+        """First-party registration (email + password)."""
+        body: dict[str, Any] = {
+            "email": email,
+            "password": password,
+            "orgSlug": org_slug,
+        }
+        if display_name is not None:
+            body["displayName"] = display_name
+        return self._req("POST", "/v1/auth/register", body)
+
+    def login_with_password(
+        self, email: str, password: str, org_slug: str = "acme"
+    ) -> dict:
+        """Email+password login (works in production)."""
+        return self._req(
+            "POST",
+            "/v1/auth/login",
+            {"email": email, "password": password, "orgSlug": org_slug},
+        )
+
+    def change_password(self, current_password: str, new_password: str) -> dict:
+        """Change the current user's password and revoke other sessions."""
+        return self._req(
+            "POST",
+            "/v1/auth/password/change",
+            {"currentPassword": current_password, "newPassword": new_password},
+        )
+
+    def request_password_reset(self, email: str, org_slug: str = "acme") -> dict:
+        """Request a reset token (always 202; no account enumeration)."""
+        return self._req(
+            "POST", "/v1/auth/password/forgot", {"email": email, "orgSlug": org_slug}
+        )
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+        """Consume a single-use reset token and set a new password."""
+        return self._req(
+            "POST",
+            "/v1/auth/password/reset",
+            {"token": token, "newPassword": new_password},
+        )
+
+    def verify_email(self, token: str) -> dict:
+        """Consume an email verification token."""
+        return self._req("POST", "/v1/auth/email/verify", {"token": token})
+
+    def request_email_verification(self) -> dict:
+        """Re-issue an email verification token for the current user."""
+        return self._req("POST", "/v1/auth/email/verify/request", {})
+
+    def list_sessions(self) -> list:
+        """List the current user's refresh-token sessions."""
+        return self._req("GET", "/v1/auth/sessions")
+
+    def revoke_session(self, session_id: str) -> dict:
+        """Revoke one session by id."""
+        return self._req("DELETE", f"/v1/auth/sessions/{quote(session_id, safe='')}")
+
+    def exchange_token(
+        self,
+        user_id: str,
+        account_id: str | None = None,
+        org_id: str | None = None,
+        scopes: list | None = None,
+        audience: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict:
+        """Delegated token exchange (Tier 2 -> Tier 1).
+
+        The client must present a service-account Bearer token or an API key.
+        Returns a short-lived token bound to one user/org/account.
+        """
+        body: dict[str, Any] = {"userId": user_id}
+        if account_id is not None:
+            body["accountId"] = account_id
+        if org_id is not None:
+            body["orgId"] = org_id
+        if scopes is not None:
+            body["scopes"] = scopes
+        if audience is not None:
+            body["audience"] = audience
+        if ttl_seconds is not None:
+            body["ttlSeconds"] = ttl_seconds
+        return self._req("POST", "/v1/auth/exchange", body)
+
     def refresh(self, refresh_token: str) -> dict:
         """Rotate a refresh token; returns a fresh token pair."""
         return self._req("POST", "/v1/auth/refresh", {"refreshToken": refresh_token})
@@ -176,22 +268,59 @@ class IamService:
             },
         )
 
-    def list_audit(self, limit: int = 50, actor: str | None = None) -> list:
-        """Read the audit log (most recent first)."""
+    def list_audit(
+        self,
+        limit: int = 50,
+        actor: str | None = None,
+        *,
+        offset: int | None = None,
+        allowed: bool | None = None,
+        action: str | None = None,
+        resource: str | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
+    ) -> list:
+        """Read the tenant-scoped audit log with action/resource/time filters."""
         params: dict[str, Any] = {"limit": limit}
         if actor:
             params["actor"] = actor
+        if offset is not None:
+            params["offset"] = offset
+        if allowed is not None:
+            params["allowed"] = "true" if allowed else "false"
+        if action:
+            params["action"] = action
+        if resource:
+            params["resource"] = resource
+        if from_time:
+            params["from"] = from_time
+        if to_time:
+            params["to"] = to_time
         return self._req("GET", f"/v1/audit?{urlencode(params)}")
 
     # ---- API keys ----
     def create_api_key(
-        self, account_id: str, name: str = "default", scopes: list | None = None
+        self,
+        account_id: str,
+        name: str = "default",
+        scopes: list | None = None,
+        user_id: str | None = None,
+        expires_in_seconds: int | None = None,
     ) -> dict:
-        """Mint an account API key (secret returned once)."""
+        """Mint an account API key (secret returned once).
+
+        Scopes default to least-privilege ``["*:read"]``; pass ``["*"]``
+        explicitly for a full administrator key.
+        """
+        body: dict[str, Any] = {"name": name, "scopes": scopes or ["*:read"]}
+        if user_id is not None:
+            body["userId"] = user_id
+        if expires_in_seconds is not None:
+            body["expiresInSeconds"] = expires_in_seconds
         return self._req(
             "POST",
             f"/v1/accounts/{quote(account_id, safe='')}/keys",
-            {"name": name, "scopes": scopes or ["*"]},
+            body,
         )
 
     def revoke_api_key(self, key_id: str) -> dict:

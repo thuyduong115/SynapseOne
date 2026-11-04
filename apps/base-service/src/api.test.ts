@@ -10,8 +10,10 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Server } from 'http';
+import http from 'node:http';
 import { createApp } from './index';
 import { __clearBaseMem } from './store';
+import { __auditEvents, __clearAudit, __flushAudit } from './audit';
 
 let server: Server;
 let base = '';
@@ -357,4 +359,168 @@ test('synapsebase vector: mapping validation, vector search and hybrid metadata 
   assert.equal(searchL2.status, 200);
   assert.equal(searchL2.json.items[0].id, 'doc1');
   assert.equal(searchL2.json.items[0].distance, 0);
+});
+
+test('text and geospatial operators (#29)', async () => {
+  await createCollection({ name: 'assets' });
+  const docs = [
+    { name: 'Broken streetlight', description: 'The streetlight on Main Street is broken', location: { lat: 10.7769, lng: 106.7009 } },
+    { name: 'Flooded road', description: 'Road closed due to flooding', location: { lat: 10.78, lng: 106.71 } },
+    { name: 'Park bench', description: 'A quiet bench in the park', location: { lat: 21.0278, lng: 105.8342 } },
+  ];
+  for (let i = 0; i < docs.length; i++) {
+    const r = await call('POST', '/v1/base/collections/assets/documents', { id: `asset-${i}`, data: docs[i] });
+    assert.equal(r.status, 201, JSON.stringify(r.json));
+  }
+
+  const text = await call('POST', '/v1/base/collections/assets/query', {
+    where: { field: 'description', op: 'text', value: 'streetlight BROKEN' },
+  });
+  assert.equal(text.status, 200, JSON.stringify(text.json));
+  assert.equal(text.json.total, 1);
+  assert.equal(text.json.items[0].id, 'asset-0');
+
+  // `$text` searches all string values, not field names (same as the SQL path).
+  const anyText = await call('POST', '/v1/base/collections/assets/query', {
+    where: { field: '$text', op: 'text', value: 'bench park' },
+  });
+  assert.equal(anyText.status, 200, JSON.stringify(anyText.json));
+  assert.deepEqual(anyText.json.items.map((i: any) => i.id), ['asset-2']);
+
+  const near = await call('POST', '/v1/base/collections/assets/query', {
+    where: { field: 'location', op: 'near', value: { lat: 10.7769, lng: 106.7009, maxDistanceKm: 5 } },
+  });
+  assert.equal(near.status, 200, JSON.stringify(near.json));
+  assert.deepEqual(near.json.items.map((i: any) => i.id).sort(), ['asset-0', 'asset-1']);
+
+  const within = await call('POST', '/v1/base/collections/assets/query', {
+    where: { field: 'location', op: 'within', value: { bbox: [106.69, 10.77, 106.72, 10.79] } },
+  });
+  assert.equal(within.status, 200, JSON.stringify(within.json));
+  assert.deepEqual(within.json.items.map((i: any) => i.id).sort(), ['asset-0', 'asset-1']);
+
+  const polygon = await call('POST', '/v1/base/collections/assets/query', {
+    where: {
+      field: 'location',
+      op: 'within',
+      value: { type: 'Polygon', coordinates: [[[106.69, 10.77], [106.72, 10.77], [106.72, 10.79], [106.69, 10.79], [106.69, 10.77]]] },
+    },
+  });
+  assert.equal(polygon.status, 200, JSON.stringify(polygon.json));
+  assert.equal(polygon.json.total, 2);
+
+  const bad = await call('POST', '/v1/base/collections/assets/query', {
+    where: { field: 'location', op: 'near', value: { lat: 'x' } },
+  });
+  assert.equal(bad.status, 400);
+});
+
+test('document listing exposes an opt-in total/cursor envelope (#29)', async () => {
+  await createCollection({ name: 'paged' });
+  for (let i = 0; i < 5; i++) {
+    await call('POST', '/v1/base/collections/paged/documents', { id: `p-${i}`, data: { i } });
+  }
+  const page = await call('GET', '/v1/base/collections/paged/documents?limit=2&withTotal=1');
+  assert.equal(page.status, 200);
+  assert.equal(page.json.total, 5);
+  assert.equal(page.json.items.length, 2);
+  assert.ok(page.json.nextCursor);
+  const next = await call('POST', '/v1/base/collections/paged/query', { limit: 2, cursor: page.json.nextCursor });
+  assert.deepEqual(next.json.items.map((i: any) => i.id), ['p-2', 'p-3']);
+
+  // Default stays a bare array (backwards compatible) with X-Total-Count.
+  const res = await fetch(`${base}/v1/base/collections/paged/documents?limit=2`, { headers: headers() });
+  assert.equal(res.headers.get('x-total-count'), '5');
+  const bare = await res.json();
+  assert.ok(Array.isArray(bare));
+});
+
+test('large collections are scanned in batches instead of failing at 10k (#29)', async () => {
+  const { createCollectionRec, createDocumentRec, listAllDocumentRecs } = await import('./store');
+  const col = await createCollectionRec({ name: 'bulk', mapping: { fields: {} }, org_id: 'bulk-org' });
+  const total = 10_050;
+  for (let i = 0; i < total; i++) {
+    await createDocumentRec(col.id, `doc-${String(i).padStart(6, '0')}`, { i });
+  }
+  const docs = await listAllDocumentRecs(col.id, { max: total, pageSize: 1000 });
+  assert.equal(docs.length, total);
+});
+
+test('mutation audit records actor, tenant, action and result (#32)', async () => {
+  __clearAudit();
+  await createCollection({ name: 'audited' });
+  const created = await call('POST', '/v1/base/collections/audited/documents', {
+    id: 'audit-doc',
+    data: { description: 'super-secret-value' },
+  });
+  assert.equal(created.status, 201);
+  await new Promise((r) => setImmediate(r));
+
+  const events = __auditEvents();
+  const write = events.find((e) => e.action === 'base:collections.documents:create');
+  assert.ok(write, JSON.stringify(events));
+  assert.equal(write.actorType, 'user');
+  assert.equal(write.actorId, 'user-1');
+  assert.equal(write.orgId, 'tenant-a');
+  assert.equal(write.result, 'allowed');
+  assert.equal(write.statusCode, 201);
+  assert.equal((write.context.params as any).collection, 'audited');
+  assert.ok(!JSON.stringify(events).includes('super-secret-value'), 'request bodies must never enter the audit trail');
+
+  // Read-only POSTs (query) are not mutations.
+  const before = __auditEvents().length;
+  await call('POST', '/v1/base/collections/audited/query', { limit: 1 });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(__auditEvents().length, before);
+
+  // Failed mutations are recorded as denied.
+  await call('DELETE', '/v1/base/collections/audited/documents/missing');
+  await new Promise((r) => setImmediate(r));
+  const denied = __auditEvents().find(
+    (e) => e.action === 'base:collections.documents:delete' && e.result === 'denied',
+  );
+  assert.ok(denied, JSON.stringify(__auditEvents()));
+  assert.equal(denied.statusCode, 404);
+});
+
+test('audit events flush to IAM with the internal secret and no PII (#32)', async () => {
+  const received: any[] = [];
+  const stub = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push({ headers: req.headers, body: JSON.parse(body) });
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true,"accepted":1}');
+    });
+  });
+  await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', () => resolve()));
+  const addr = stub.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  const savedUrl = process.env.AUDIT_INGEST_URL;
+  const savedSecret = process.env.SYNAPSEONE_INTERNAL_SECRET;
+  process.env.AUDIT_INGEST_URL = `http://127.0.0.1:${port}/v1/audit/ingest`;
+  process.env.SYNAPSEONE_INTERNAL_SECRET = 'audit-test-secret';
+  try {
+    __clearAudit();
+    await createCollection({ name: 'flushed' });
+    await new Promise((r) => setImmediate(r));
+    await __flushAudit();
+    assert.equal(received.length, 1);
+    assert.equal(received[0].headers['x-synapseone-internal'], 'audit-test-secret');
+    const event = received[0].body.events[0];
+    assert.equal(event.action, 'base:collections:create');
+    assert.equal(event.actorId, 'user-1');
+    assert.equal(event.orgId, 'tenant-a');
+    assert.equal(event.result, 'allowed');
+    assert.equal(event.statusCode, 201);
+    assert.ok(!JSON.stringify(event).includes('content-type'));
+  } finally {
+    if (savedUrl === undefined) delete process.env.AUDIT_INGEST_URL;
+    else process.env.AUDIT_INGEST_URL = savedUrl;
+    if (savedSecret === undefined) delete process.env.SYNAPSEONE_INTERNAL_SECRET;
+    else process.env.SYNAPSEONE_INTERNAL_SECRET = savedSecret;
+    __clearAudit();
+    await new Promise<void>((resolve) => stub.close(() => resolve()));
+  }
 });

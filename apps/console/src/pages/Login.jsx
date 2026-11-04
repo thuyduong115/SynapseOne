@@ -121,7 +121,7 @@ export default function Login() {
         <p className="text-xs text-normal-text mt-4 text-center">
           Email sign-in is for development · Production uses SSO (Authentik/Keycloak) or API keys.
           <br />
-          <Link to="/welcome" className="text-main-blue">About synapseone</Link>
+          <Link to="/about" className="text-main-blue">About synapseone</Link>
           {' · '}
           <Link to="/api-docs" className="text-main-blue">API Docs</Link>
         </p>

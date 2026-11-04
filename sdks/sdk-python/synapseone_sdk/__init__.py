@@ -29,7 +29,7 @@ Example::
 
     from synapseone_sdk import SynapseOneClient
 
-    client = SynapseOneClient("https://synapseone.space", token=jwt)
+    client = SynapseOneClient("https://api.synapseone.space", token=jwt)
     parks = client.base.collection("parks", model=Park, mapping={"name": "profile.name"})
     parks.create(Park(name="Central"))
     result = client.queue.publish("emails", {"to": "a@b.c"})
@@ -40,7 +40,7 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
-from ._http import UNSET, HttpClient, SynapseOneError
+from ._http import UNSET, HttpClient, SynapseOneError, iter_text, parse_chat_delta
 from .ai import AiService
 from .base import (
     BaseCollection,
@@ -52,11 +52,14 @@ from .base import (
     object_to_data,
 )
 from .faststore import FaststoreService
+from .health import HealthService
 from .iam import IamService
 from .inference import InferenceService
 from .lds import LdsService
 from .queue import QueueService
 from .stream import StreamService
+from .storage import StorageService
+from .notifications import NotificationsService
 from .workflow import WorkflowService, trigger_webhook, unwrap_executions
 
 __all__ = [
@@ -66,16 +69,21 @@ __all__ = [
     "BaseService",
     "FaststoreService",
     "IamService",
+    "HealthService",
     "InferenceService",
     "LdsService",
     "QueryResult",
     "VectorSearchResult",
     "QueueService",
     "StreamService",
+    "StorageService",
+    "NotificationsService",
     "SynapseDXClient",
     "SynapseDXError",
     "SynapseOneClient",
     "SynapseOneError",
+    "iter_text",
+    "parse_chat_delta",
     "WorkflowService",
     "data_to_object",
     "normalize_mapping",
@@ -88,8 +96,8 @@ __all__ = [
 class SynapseOneClient:
     """One client, one HTTP layer, seven service namespaces.
 
-    ``base_url`` points at the gateway (defaults to ``https://synapseone.space`` or
-    ``SYNAPSEONE_BASE_URL``) or a single service origin. ``tenant`` is sent as
+    ``base_url`` points at the gateway (defaults to ``https://api.synapseone.space``
+    or ``SYNAPSEONE_BASE_URL``) or a single service origin. ``tenant`` is sent as
     ``x-synapseone-tenant`` and is only required by platform callers of faststore/queue.
     """
 
@@ -100,9 +108,15 @@ class SynapseOneClient:
         api_key: str | None = None,
         timeout: int = 15,
         tenant: str | None = None,
+        max_attempts: int = 3,
     ) -> None:
         self._http = HttpClient(
-            base_url, token=token, api_key=api_key, tenant=tenant, timeout=timeout
+            base_url,
+            token=token,
+            api_key=api_key,
+            tenant=tenant,
+            timeout=timeout,
+            max_attempts=max_attempts,
         )
         self.iam = IamService(self._http)
         self.workflow = WorkflowService(self._http)
@@ -113,6 +127,10 @@ class SynapseOneClient:
         self.queue = QueueService(self._http)
         self.stream = StreamService(self._http)
         self.inference = InferenceService(self._http)
+        self.health = HealthService(self._http)
+        self.readiness = self.health
+        self.storage = StorageService(self._http)
+        self.notifications = NotificationsService(self._http)
 
     # ---- transport knobs (also mirrored by JS setToken/setApiKey and Go) ----
     @property
@@ -182,6 +200,16 @@ class SynapseOneClient:
 
 _IAM_METHODS = (
     "login",
+    "register",
+    "login_with_password",
+    "change_password",
+    "request_password_reset",
+    "reset_password",
+    "verify_email",
+    "request_email_verification",
+    "list_sessions",
+    "revoke_session",
+    "exchange_token",
     "refresh",
     "logout",
     "logout_all",

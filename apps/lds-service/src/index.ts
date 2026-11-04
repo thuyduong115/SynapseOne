@@ -15,6 +15,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
+import { auditMiddleware } from './audit';
 import {
   createDatasourceRec, getDatasourceRec, listDatasourceRecs, updateDatasourceRec, deleteDatasourceRec,
   getAttributesRec, replaceAttributesRec, upsertRecordRec, getRecordRec, listRecordRecs,
@@ -229,6 +230,8 @@ export function createApp(): express.Express {
     next();
   }) as any);
   app.use(express.json({ limit: '2mb' }));
+  // Data-plane mutation audit (#32): actor/tenant/action/result per write.
+  app.use(auditMiddleware('lds'));
 
   // ---- Prometheus metrics (best-effort counter; bounded cardinality) ----
   const METRIC_REQUESTS: Map<string, number> = new Map();

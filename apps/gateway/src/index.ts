@@ -21,6 +21,7 @@ import {
   isUsageTelemetryEnabled,
   startUsageTelemetry,
 } from './usage';
+import { scopeAllows } from './scopes';
 
 dotenv.config();
 
@@ -225,7 +226,12 @@ function authMiddleware(mode: RouteRule['auth']) {
                 (req as any).synapseoneError = 'invalid_api_key';
                 return res.status(401).json({ error: 'invalid_api_key' });
               }
-              (req as any).principal = { type: 'apikey', account: info.account_id, scopes: info.scopes };
+              (req as any).principal = {
+                type: 'apikey',
+                account: info.account_id,
+                org: (info as any).org_id,
+                scopes: info.scopes,
+              };
               return next();
             },
             () => {
@@ -256,7 +262,7 @@ export async function verifyApiKeyUpstream(
   apiKey: string,
   iamBase?: string,
   internalSecret: string | undefined = INTERNAL_SECRET,
-): Promise<{ account_id: string; scopes: string[] } | null> {
+): Promise<{ account_id: string; org_id?: string; scopes: string[] } | null> {
   const iam = (iamBase || process.env.IAM_SERVICE_URL || 'http://iam:4001').replace(/\/$/, '');
   const ctl = new AbortController();
   const to = setTimeout(() => ctl.abort(), 5000);
@@ -277,11 +283,37 @@ export async function verifyApiKeyUpstream(
     if (!r.ok) return null;
     const j: any = await r.json();
     if (!j.valid) return null;
-    return { account_id: j.account_id, scopes: j.scopes || [] };
+    return { account_id: j.account_id, ...(j.org_id ? { org_id: j.org_id } : {}), scopes: j.scopes || [] };
   } catch {
     clearTimeout(to);
     throw new Error('iam_unreachable');
   }
+}
+
+/** Parse TRUST_PROXY (issue #41).
+ *  Accepts:
+ *   - unset/''/'0'/'false'  → disabled (direct exposure; the default)
+ *   - an integer hop count   → trust that many proxies (`1` behind nginx)
+ *   - a comma list of IPs/CIDRs/names (`loopback,172.16.0.0/12`)
+ *  Rejects a blanket `true`: trusting every peer lets any client spoof
+ *  X-Forwarded-For and forge another client's rate-limit bucket. */
+export function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  const v = (raw ?? '').trim();
+  if (!v || v === '0' || v.toLowerCase() === 'false') return false;
+  if (v.toLowerCase() === 'true') {
+    throw new Error('[gateway] TRUST_PROXY=true is forbidden (any peer could spoof X-Forwarded-For). Use a hop count or a CIDR list.');
+  }
+  if (/^\d+$/.test(v)) {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      throw new Error('[gateway] TRUST_PROXY hop count must be 1..10');
+    }
+    return n;
+  }
+  if (!/^[A-Za-z0-9.:/,_\- ]+$/.test(v)) {
+    throw new Error('[gateway] TRUST_PROXY must be a hop count or a comma-separated IP/CIDR list');
+  }
+  return v;
 }
 
 /** Xóa x-synapseone-* do client gửi (chống spoof), ghi lại từ principal đã verify.
@@ -319,6 +351,7 @@ export function propagatePrincipal(req: express.Request): void {
     h['x-synapseone-kind'] = 'user';
   } else if (p?.type === 'apikey') {
     h['x-synapseone-kind'] = 'apikey';
+    if ((p as any).org) h['x-synapseone-org'] = String((p as any).org);
     if ((p as any).account) h['x-synapseone-account'] = String((p as any).account);
     if (Array.isArray((p as any).scopes) && (p as any).scopes.length) {
       h['x-synapseone-scopes'] = (p as any).scopes.join(',');
@@ -343,6 +376,14 @@ export function createApp(): express.Express {
   }
   const app = express();
   app.disable('x-powered-by');
+  // Trust proxy (issue #41): behind nginx/TLS edge, req.ip must be the real
+  // client from X-Forwarded-For, not the proxy container. Default is off so a
+  // directly-exposed gateway can never be fooled by a spoofed header.
+  const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+  if (trustProxy !== false) app.set('trust proxy', trustProxy as any);
+  if (process.env.NODE_ENV === 'production' && trustProxy === false) {
+    console.warn('[gateway][security] TRUST_PROXY is unset in production — per-IP limits will key on the TLS edge address. Set TRUST_PROXY=1 (nginx) or a CIDR list.');
+  }
   // Baseline security headers (no extra dep; gateway is a proxy, not a page server).
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -411,14 +452,22 @@ export function createApp(): express.Express {
   // for DDoS, but this stops single-IP brute-force / /ready fan-out amplification).
   const hits = new Map<string, { n: number; reset: number }>();
   const WINDOW_MS = 60_000;
+  /** Hard cap so a botnet spraying source IPs cannot grow the map forever. */
+  const HITS_MAX = 50_000;
   setInterval(() => {
     const now = Date.now();
     for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
   }, WINDOW_MS).unref?.();
   function edgeLimit(max: number) {
     return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      // req.ip honours TRUST_PROXY (parseTrustProxy above): behind the edge it is
+      // the real client from X-Forwarded-For, not the nginx container IP.
       const ip = String(req.ip || req.socket?.remoteAddress || 'anon').slice(0, 64);
       const now = Date.now();
+      if (hits.size > HITS_MAX) {
+        for (const [k, v] of hits) if (v.reset < now) hits.delete(k);
+        if (hits.size > HITS_MAX) hits.clear(); // pathological spray: fail open for one window
+      }
       const cur = hits.get(ip + ':' + max);
       if (!cur || cur.reset < now) { hits.set(ip + ':' + max, { n: 1, reset: now + WINDOW_MS }); return next(); }
       cur.n++;
@@ -429,11 +478,46 @@ export function createApp(): express.Express {
       return next();
     };
   }
+  // Per-tenant inference quota (#26): LLM calls burn a shared provider budget,
+  // so cap requests per org/account (or client IP for anonymous) per minute.
+  const INFERENCE_LIMIT_PER_MIN = Math.min(
+    Math.max(Number(process.env.INFERENCE_RATE_LIMIT_PER_MIN || 60), 1),
+    100_000,
+  );
+  const quotaHits = new Map<string, { n: number; reset: number }>();
+  function inferenceQuota(req: express.Request): { ok: boolean; retryAfter: number } {
+    const p = (req as any).principal;
+    const key = `inference:${p?.org || p?.account || req.ip || 'anon'}`;
+    const now = Date.now();
+    const cur = quotaHits.get(key);
+    if (!cur || cur.reset < now) {
+      quotaHits.set(key, { n: 1, reset: now + WINDOW_MS });
+      return { ok: true, retryAfter: 0 };
+    }
+    cur.n++;
+    if (cur.n > INFERENCE_LIMIT_PER_MIN) {
+      return { ok: false, retryAfter: Math.max(1, Math.ceil((cur.reset - now) / 1000)) };
+    }
+    return { ok: true, retryAfter: 0 };
+  }
+  setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of quotaHits) if (v.reset < now) quotaHits.delete(k);
+  }, WINDOW_MS).unref?.();
+
   // NOTE: không dùng express.json() toàn cục — body-parser sẽ nuốt stream
   // khiến http-proxy-middleware forward body rỗng/bể tới upstream.
   // Gateway là proxy thuần nên giữ nguyên raw body.
 
-  app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'gateway', version: VERSION, time: new Date().toISOString() }));
+  app.get('/health', (_req, res) => res.json({
+    status: 'ok',
+    service: 'gateway',
+    version: VERSION,
+    schemaVersion: '1',
+    // Shallow health: the gateway itself. Dependency detail lives on /ready.
+    dependencies: [],
+    time: new Date().toISOString(),
+  }));
   app.get('/metrics', async (_req, res) => {
     try {
       res.setHeader('Content-Type', register.contentType);
@@ -446,16 +530,27 @@ export function createApp(): express.Express {
   // Aggregate readiness: gateway + các upstream chính (timeout ngắn, không fail hard).
   // Rate-limited: mỗi hit quạt 1:2 upstream nên phải giới hạn.
   app.get('/ready', edgeLimit(30) as any, async (_req, res) => {
-    async function probe(name: string, url: string): Promise<{ name: string; ok: boolean; status?: number; ms?: number }> {
+    async function probe(name: string, url: string): Promise<{ name: string; ok: boolean; status?: number; ms?: number; version?: string; error?: string }> {
       const t0 = Date.now();
       try {
         const ctl = new AbortController();
         const to = setTimeout(() => ctl.abort(), 4000);
-        const r = await fetch(`${url.replace(/\/$/, '')}/health`, { signal: ctl.signal });
+        const r = await fetch(`${url.replace(/\/$/, '')}/health`, {
+          signal: ctl.signal,
+          headers: {
+            'x-request-id': 'ready-probe',
+            ...(INTERNAL_SECRET ? { 'x-synapseone-internal': INTERNAL_SECRET } : {}),
+          },
+        });
         clearTimeout(to);
-        return { name, ok: r.ok, status: r.status, ms: Date.now() - t0 };
+        let version: string | undefined;
+        try {
+          const body: any = await r.json();
+          if (body && typeof body.version === 'string') version = body.version;
+        } catch { /* non-JSON health is still a health signal */ }
+        return { name, ok: r.ok, status: r.status, ms: Date.now() - t0, ...(version ? { version } : {}) };
       } catch {
-        return { name, ok: false, ms: Date.now() - t0 };
+        return { name, ok: false, ms: Date.now() - t0, error: 'unreachable' };
       }
     }
     const iamUrl = process.env.IAM_SERVICE_URL || 'http://iam:4001';
@@ -466,14 +561,28 @@ export function createApp(): express.Express {
     const faststoreUrl = process.env.FASTSTORE_SERVICE_URL || 'http://faststore:4006';
     const queueUrl = process.env.QUEUE_SERVICE_URL || 'http://queue:4007';
     const streamUrl = process.env.STREAM_SERVICE_URL;
+    const inferenceUrl = process.env.INFERENCE_SERVICE_URL;
+    const storageUrl = process.env.STORAGE_SERVICE_URL;
+    const notificationsUrl = process.env.NOTIFICATIONS_SERVICE_URL;
     const probeList = [
       probe('iam', iamUrl), probe('workflow', wfUrl), probe('ai', aiUrl), probe('lds', ldsUrl),
       probe('base', baseUrl), probe('faststore', faststoreUrl), probe('queue', queueUrl),
     ];
     if (streamUrl) probeList.push(probe('stream', streamUrl));
+    // Inference is a routed dependency; probe it whenever its URL is configured.
+    if (inferenceUrl) probeList.push(probe('inference', inferenceUrl));
+    if (storageUrl) probeList.push(probe('storage', storageUrl));
+    if (notificationsUrl) probeList.push(probe('notifications', notificationsUrl));
     const upstreams = await Promise.all(probeList);
     const allOk = upstreams.every((u) => u.ok);
-    res.status(allOk ? 200 : 503).json({ status: allOk ? 'ready' : 'degraded', service: 'gateway', upstreams, time: new Date().toISOString() });
+    res.status(allOk ? 200 : 503).json({
+      status: allOk ? 'ready' : 'degraded',
+      service: 'gateway',
+      version: VERSION,
+      schemaVersion: '1',
+      upstreams,
+      time: new Date().toISOString(),
+    });
   });
 
   const routes = loadRoutes();
@@ -523,6 +632,30 @@ export function createApp(): express.Express {
     httpCounter.inc({ route: route.path, status: 'incoming' });
     return authMiddleware(route.auth)(req, res, (err?: any) => {
       if (err) return next(err);
+      // Per-route authorization (#23): the credential must carry a scope that
+      // covers this service+action. User JWTs hold `*`; API keys and delegated
+      // tokens are narrow, so a read-only key cannot perform writes.
+      const principal = (req as any).principal;
+      if (principal && route.auth !== 'none' && !scopeAllows(principal.scopes || [], req.path, req.method)) {
+        (req as any).synapseoneError = 'scope_denied';
+        return res.status(403).json({
+          error: 'scope_denied',
+          message: `Credential scopes do not allow ${String(req.method || 'GET').toUpperCase()} ${req.path}`,
+        });
+      }
+      // Per-tenant inference quota (configurable budget, 429 + Retry-After).
+      if (route.path === '/v1/inference' || route.path === '/v1/ai') {
+        const quota = inferenceQuota(req);
+        if (!quota.ok) {
+          (req as any).synapseoneError = 'quota_exceeded';
+          res.setHeader('Retry-After', String(quota.retryAfter));
+          return res.status(429).json({
+            error: 'quota_exceeded',
+            message: `Inference quota is ${INFERENCE_LIMIT_PER_MIN} requests/minute per tenant`,
+            retryAfter: quota.retryAfter,
+          });
+        }
+      }
       propagatePrincipal(req);
       return next();
     });

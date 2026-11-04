@@ -15,6 +15,10 @@ reads which key (audited from source):
 | `BASE_SERVICE_URL` | `http://base:4005` | SynapseBase upstream |
 | `FASTSTORE_SERVICE_URL` | `http://faststore:4006` | Synapse Faststore upstream |
 | `QUEUE_SERVICE_URL` | `http://queue:4007` | SynapseQueue upstream |
+| `STREAM_SERVICE_URL` | `http://stream:4009` | SynapseStream upstream (also probed by `/ready`) |
+| `INFERENCE_SERVICE_URL` | `http://inference:4008` | Inference upstream (also probed by `/ready`) |
+| `STORAGE_SERVICE_URL` | `http://storage:4010` | SynapseObjectStorage upstream |
+| `NOTIFICATIONS_SERVICE_URL` | `http://notifications:4011` | SynapseNotifications upstream |
 | `IAM_JWT_SECRET` | — | **must match** IAM, used to verify Bearer tokens |
 | `GATEWAY_ROUTES_PATH` | `./routes.yaml` | routing table |
 | `GATEWAY_VERIFY_APIKEY` | `true` | `true` → centralized `X-API-Key` verification via IAM (fail-closed 503 when IAM is down); `false` → edge presence check, upstream verifies (dev-only, forbidden in production) |
@@ -22,7 +26,8 @@ reads which key (audited from source):
 | `CORS_ORIGIN` | (allow all) | `a.com,b.com` → only those origins (production) |
 | `SYNAPSEONE_INTERNAL_SECRET` | — (dev) | gateway → service credential (`x-synapseone-internal` header); **identical** on every service in production |
 | `HSTS_ENABLED` | `false` | `true` → send `Strict-Transport-Security` (only behind TLS) |
-| ~~`RATE_LIMIT_*` / `AUTH_RATE_LIMIT_*` / `TRUST_PROXY`~~ | — | removed from gateway (rate limiting lives at Ingress/WAF); restore by reverting the removal commit |
+| `TRUST_PROXY` | `false` | Express trust-proxy: unset/`0` = direct exposure; `1` behind one nginx/Ingress hop; or a CIDR/name list. `true` is rejected (XFF spoofing). |
+| `INFERENCE_RATE_LIMIT_PER_MIN` | `60` | per-tenant AI/inference quota; `429` + `Retry-After` when exceeded |
 | `REDIS_URL` | — (memory) | `redis://...` → Redis-backed rate limiting (shared across replicas, fail-open when Redis is down) |
 | `GATEWAY_HOST_PORT` | 8080 | host port (compose only) |
 
@@ -37,12 +42,18 @@ reads which key (audited from source):
 | `IAM_JWT_EXPIRES_IN` / `IAM_REFRESH_EXPIRES_IN` | 3600 / 2592000 (seconds) | token TTLs (clamped 60–86400 / 3600–315360000; garbage env falls back to default) |
 | `IAM_API_KEY_PEPPER` | — (plain SHA-256) | HMAC pepper for API-key/refresh-token hashes at rest; keys created before the pepper still verify (legacy fallback) |
 | `AUDIT_RETENTION_DAYS` | `0` (disabled) | hourly purge of `audit_log` rows older than N days (batched, clamped 1–3650); prod e.g. `180` |
-| `IAM_ALLOW_DEV_LOGIN` | `true` | `false` disables `POST /v1/auth/login` in production (SSO + API keys only) |
+| `AUDIT_TRAIL` | `true` | data-plane services (Base/Faststore/Queue/Stream/Workflow/LDS) emit one mutation audit event per write to IAM (`POST /v1/audit/ingest`). Set `false` only in local dev |
+| `AUDIT_INGEST_URL` | `${IAM_SERVICE_URL}/v1/audit/ingest` | override the data-plane audit sink (tests/staging) |
+| `IAM_ALLOW_DEV_LOGIN` | `true` | controls only the passwordless dev login path; `false` in production still allows email+password, OIDC and API keys |
 | `IAM_ALLOW_OIDC_DEMO_CALLBACK` | `true` | demo callback trusts the caller-supplied email (impersonation possible) — production **must** be `false` (then a real IdP `code` is required) |
 | `SYNAPSEONE_INTERNAL_SECRET` | — (dev) | requires a matching `x-synapseone-internal` header on every `/v1/*` (except `/v1/auth/*`) — blocks direct `:4001` bypass |
 | `HSTS_ENABLED` | `false` | `true` → send `Strict-Transport-Security` (only behind TLS) |
 | `OIDC_PROVIDER` | `authentik` | IdP display name (`authentik`\|`keycloak`) |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URI` | see `.env.example` | federated OIDC (Authentik/Keycloak). For SPA login, point `OIDC_REDIRECT_URI` at the Console's `/oidc/callback` page (e.g. `https://cloud.example.com/oidc/callback`) |
+| `IAM_REGISTRATION_ENABLED` | `true` | first-party registration (`POST /v1/auth/register`); set `false` for OIDC-only deployments |
+| `IAM_REGISTRATION_ALLOW_NEW_ORGS` | `true` | self-service creation of a brand-new org on register; joining an existing org always requires an invitation |
+| `IAM_EXPOSE_LIFECYCLE_TOKENS` | `true` (dev) | return reset/verification tokens in API responses when no mailer is wired; forced off in production |
+| `IAM_RESET_TOKEN_TTL_SECONDS` / `IAM_VERIFY_TOKEN_TTL_SECONDS` | `3600` / `86400` | single-use token TTLs (clamped) |
 | `OIDC_ALLOWED_ORGS` | — (any slug) | comma-separated org **slugs** allowed through OIDC → `403 org_not_allowed` otherwise. A new slug is self-service (org is created on first login); joining an **existing** org always requires an existing membership (`403 org_membership_required`) |
 
 ## Workflow (`apps/workflow-service`)
@@ -96,7 +107,7 @@ attributes default-deny; visibility is resolved at read time from the registry
 | `PORT` | 4005 | listen port (gateway route `/v1/base`, auth `either`) |
 | `DATABASE_URL` | — (memory) | `postgres://...` → Postgres backend; **required in production** (otherwise a per-process in-memory store) |
 | `BASE_MAX_DOCUMENT_BYTES` | 262144 | max serialized document size, clamped 1024..4194304 |
-| `BASE_QUERY_SCAN_LIMIT` | 10000 | max documents scanned per query, clamped 100..100000; larger collections return `413 collection_too_large` |
+| `BASE_QUERY_SCAN_LIMIT` | 200000 | in-memory fallback only: max documents scanned per query (batched), clamped 100..1000000. Postgres queries use pushdown and never hit this cap |
 | `SYNAPSEONE_INTERNAL_SECRET` | — (dev) | requires a matching `x-synapseone-internal` header on every `/v1/*` — blocks direct `:4005` bypass |
 | `HSTS_ENABLED` / `CORS_ORIGIN` | `false` / — | same semantics as the other services |
 | `BASE_SERVICE_HOST_PORT` | `127.0.0.1:4005` | compose host binding |
@@ -126,6 +137,47 @@ The three data services share the platform tenancy model: principal callers are
 scoped to their org/account/user; platform callers must select a tenant with
 `x-synapseone-tenant` (Faststore/Queue) or `?orgId`/`?accountId` (Base). The gateway
 forwards `x-synapseone-tenant` and strips the other client-supplied identity headers.
+API-key principals now also carry the owning **org** (resolved by IAM), so JWT and
+API-key traffic of one org share the `org:<id>` namespace and usage attribution (#28).
+
+## Stream — SynapseStream (`apps/stream-service`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `PORT` | 4009 | listen port (gateway route `/v1/stream`) |
+| `STREAM_ENGINE` | derives from Redis | `redis`/`memory`/registered driver; **`memory` is forbidden in production** |
+| `STREAM_REDIS_URL` | falls back to `REDIS_URL` | durable engine URL; required in production when `STREAM_ENGINE` is unset |
+| `STREAM_MAX_PAYLOAD_BYTES` | 262144 | max message payload |
+| `SYNAPSEONE_INTERNAL_SECRET` | — | required in production (boot aborts without it) |
+| `CORS_ORIGIN` | — | required in production (wildcard CORS is rejected) |
+
+## Inference (`apps/inference-service`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `PORT` | 4008 | listen port (gateway route `/v1/inference`) |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | OpenRouter defaults | LLM provider + model |
+| `OPENROUTER_TIMEOUT_MS` / `OPENROUTER_RETRIES` | 30000 / 2 | upstream call budget/retries |
+| `EMBEDDING_MODEL_NAME` / `DECISION_MODEL_NAME` | local models | self-hosted model ids |
+| `IAM_SERVICE_URL` | `http://iam:4001` | usage/token metering target |
+| `INFERENCE_USAGE_REPORTING` | `true` | report prompt/completion tokens to IAM usage analytics |
+| `SYNAPSEONE_INTERNAL_SECRET` | — | required in production |
+| `CORS_ORIGIN` | — | required in production (wildcard CORS is rejected) |
+
+## Object storage (`apps/storage-service`)
+
+See `docs/object-storage.md`. Key settings: `STORAGE_BACKEND` (`fs|s3`, required in
+production), `STORAGE_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY/PATH_STYLE`,
+`STORAGE_FS_ROOT`, `STORAGE_MAX_OBJECT_BYTES` (25 MiB), `STORAGE_TENANT_QUOTA_BYTES`
+(5 GiB), `STORAGE_ALLOWED_CONTENT_TYPES`.
+
+## Notifications (`apps/notifications-service`)
+
+See `docs/notifications.md`. Key settings: `DATABASE_URL` (required in production),
+`NOTIFICATIONS_QUEUE_URL`/`_QUEUE_NAME` (SynapseQueue delivery),
+`NOTIFICATIONS_EMAIL_RELAY_URL`/`_SMS_RELAY_URL`/`_PUSH_RELAY_URL`,
+`NOTIFICATIONS_MAX_ATTEMPTS` (5), `NOTIFICATIONS_RETRY_BASE_SECONDS` (5),
+`NOTIFICATIONS_RATE_LIMIT_PER_MIN` (120).
 
 ## Console (`apps/console`, runtime via `config.js`)
 

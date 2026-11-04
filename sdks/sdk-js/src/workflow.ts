@@ -7,7 +7,7 @@
  * and public inbound webhooks.
  */
 
-import { HttpClient } from './_http';
+import { HttpClient, WEBHOOK_TIMEOUT_MS } from './_http';
 
 /** Credential kinds accepted by the workflow engine (used by http/webhook nodes). */
 export type CredentialKind = 'bearer' | 'api-key' | 'basic' | 'hmac';
@@ -132,12 +132,22 @@ export class WorkflowService {
    * Fire a public inbound webhook through the gateway: `ANY /webhook/:path`.
    * No auth is required; per-workflow auth/rate-limit/idempotency still apply.
    * `path` is the webhook node's `parameters.path`, not a workflow id.
+   *
+   * The gateway allows 300s for `/webhook`; this call uses that budget unless
+   * `init.timeoutMs` overrides it.
    */
-  triggerWebhook(path: string, payload?: unknown, init: { method?: string } = {}) {
+  triggerWebhook(
+    path: string,
+    payload?: unknown,
+    init: { method?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ) {
     const clean = String(path || '').replace(/^\/+|\/+$/g, '').split('?')[0];
     if (!clean) throw new Error('synapseone webhook: path required');
     const method = (init.method || (payload === undefined ? 'GET' : 'POST')).toUpperCase();
-    return this.http.call(method, `/webhook/${clean}`, payload);
+    return this.http.req(`/webhook/${clean}`, {
+      method,
+      body: payload === undefined || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
+    }, { timeoutMs: init.timeoutMs ?? WEBHOOK_TIMEOUT_MS, signal: init.signal, retryable: true });
   }
 }
 
@@ -172,7 +182,7 @@ export async function triggerWebhook(
   webhookBaseUrl: string,
   path: string,
   payload?: unknown,
-  init?: { method?: string; timeoutMs?: number },
+  init?: { method?: string; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<any> {
   const base = webhookBaseUrl.replace(/\/$/, '');
   const clean = String(path || '').replace(/^\/+|\/+$/g, '').split('?')[0];
@@ -180,19 +190,25 @@ export async function triggerWebhook(
   const method = (init?.method || (payload === undefined ? 'GET' : 'POST')).toUpperCase();
   const url = `${base}/webhook/${clean}`;
   const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), init?.timeoutMs ?? 15000);
+  const onAbort = () => ctl.abort();
+  if (init?.signal) {
+    if (init.signal.aborted) ctl.abort();
+    else init.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  const to = setTimeout(() => ctl.abort(), init?.timeoutMs ?? WEBHOOK_TIMEOUT_MS);
   let r: Response;
   try {
     r = await fetch(url, {
       method,
       signal: ctl.signal,
       headers: { 'Content-Type': 'application/json' },
-      body: payload === undefined ? undefined : JSON.stringify(payload),
+      body: payload === undefined || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
     });
   } catch (e: any) {
     throw new Error(`synapseone network /webhook/${clean}: ${e?.message || e}`);
   } finally {
     clearTimeout(to);
+    if (init?.signal) init.signal.removeEventListener('abort', onAbort);
   }
   const text = await r.text();
   let data: any = null;

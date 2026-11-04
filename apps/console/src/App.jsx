@@ -17,6 +17,7 @@ import { PageSkeleton, RouteProgress, ScrollToTop } from './components/loading.j
 import Login from './pages/Login.jsx';
 import OidcCallback from './pages/OidcCallback.jsx';
 import Landing from './pages/Landing.jsx';
+import About from './pages/About.jsx';
 
 // Lazy-load heavy console pages so the first paint stays fast and every
 // route change shows a skeleton instead of a blank flash.
@@ -132,6 +133,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/welcome" element={<Navigate to="/" replace />} />
+          <Route path="/about" element={<About />} />
           <Route path="/login" element={<Login />} />
           <Route path="/oidc/callback" element={<OidcCallback />} />
           <Route path="/api-docs" element={<DocsLayout><ApiDocs /></DocsLayout>} />

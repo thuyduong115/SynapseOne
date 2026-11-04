@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
 
-from ._http import HttpClient
+from ._http import INFERENCE_TIMEOUT, HttpClient, iter_text, parse_chat_delta
 
 _PREFIX = "/v1/inference"
 
@@ -21,7 +21,7 @@ class InferenceService:
 
     def health(self) -> dict[str, Any]:
         """Check health and subsystem readiness of the inference engine."""
-        return self._http.get(f"{_PREFIX}/health")
+        return self._http.get(f"{_PREFIX}/health", timeout=INFERENCE_TIMEOUT)
 
     def chat(
         self,
@@ -32,7 +32,11 @@ class InferenceService:
         stream: bool = False,
         **extra: Any,
     ) -> dict[str, Any]:
-        """Run chat completions through the OpenRouter-backed LLM proxy."""
+        """Run chat completions through the OpenRouter-backed LLM proxy.
+
+        LLM calls get the 120s inference budget (the SDK default is 15s).
+        Use :meth:`chat_stream` for token-by-token SSE.
+        """
         body: dict[str, Any] = {"messages": messages, "stream": stream, **extra}
         if model is not None:
             body["model"] = model
@@ -40,7 +44,51 @@ class InferenceService:
             body["temperature"] = temperature
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
-        return self._http.post(f"{_PREFIX}/chat/completions", body)
+        return self._http.post(f"{_PREFIX}/chat/completions", body, timeout=INFERENCE_TIMEOUT)
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **extra: Any,
+    ) -> Iterator[tuple[str, str]]:
+        """Stream chat completions as ``(event, data)`` SSE records.
+
+        Use :func:`synapseone_sdk.iter_text` or
+        :func:`synapseone_sdk.parse_chat_delta` to extract incremental text::
+
+            for chunk in iter_text(client.inference.chat_stream(msgs)):
+                print(chunk, end="", flush=True)
+        """
+        body: dict[str, Any] = {"messages": messages, "stream": True, **extra}
+        if model is not None:
+            body["model"] = model
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        return self._http.stream("POST", f"{_PREFIX}/chat/completions", body)
+
+    def chat_text(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **extra: Any,
+    ) -> Iterator[str]:
+        """Stream only the incremental assistant text."""
+        return iter_text(
+            self.chat_stream(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **extra,
+            )
+        )
 
     def embeddings(
         self,
@@ -52,7 +100,7 @@ class InferenceService:
         body: dict[str, Any] = {"input": inputs, **extra}
         if model is not None:
             body["model"] = model
-        return self._http.post(f"{_PREFIX}/embeddings", body)
+        return self._http.post(f"{_PREFIX}/embeddings", body, timeout=INFERENCE_TIMEOUT)
 
     def decision(
         self,
@@ -61,7 +109,7 @@ class InferenceService:
     ) -> dict[str, Any]:
         """Evaluate structured questions via Decision-2.0-Eos-0.8B (system_one)."""
         body = {"state": state, "questions": questions}
-        return self._http.post(f"{_PREFIX}/decision", body)
+        return self._http.post(f"{_PREFIX}/decision", body, timeout=INFERENCE_TIMEOUT)
 
     def route(
         self,
@@ -73,4 +121,7 @@ class InferenceService:
         body: dict[str, Any] = {"input": input_text, "choices": choices}
         if instruction:
             body["instruction"] = instruction
-        return self._http.post(f"{_PREFIX}/decision/route", body)
+        return self._http.post(f"{_PREFIX}/decision/route", body, timeout=INFERENCE_TIMEOUT)
+
+
+__all__ = ["InferenceService", "parse_chat_delta"]

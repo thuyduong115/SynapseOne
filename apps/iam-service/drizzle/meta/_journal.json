@@ -15,6 +15,20 @@
       "when": 1792563659203,
       "tag": "0001_true_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0002_password_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792600100000,
+      "tag": "0003_usage_tokens",
+      "breakpoints": true
     }
   ]
 }

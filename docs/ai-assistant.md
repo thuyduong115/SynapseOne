@@ -53,3 +53,24 @@ principal — model calls cost money). Full table: [configuration.md](configurat
 
 Failures: see [troubleshooting.md](troubleshooting.md) ("Chatbot answers 502").
 Step-level errors land in the service logs as `[ai] step '<name>' failed`.
+
+## Inference capability (`/v1/inference`) — streaming, quotas and metering
+
+The guidance assistant above is separate from the inference service. For product
+AI features use `client.inference`:
+
+- `chat(messages, opts)` — buffered completion (120s SDK/gateway budget).
+- `chatStream(messages, opts, { signal })` — OpenAI-compatible SSE; iterate
+  `{event, data}` and use `parseChatDelta(data)` (JS) / `iter_text(...)` (Python)
+  for incremental tokens. Go has `InferenceChatStream`.
+- `embeddings`, `decision`, `route` — self-hosted models.
+
+Quotas and cost attribution:
+
+- The gateway enforces `INFERENCE_RATE_LIMIT_PER_MIN` per tenant
+  (`429 quota_exceeded` + `Retry-After`), configurable per deployment.
+- The inference service reports `prompt_tokens`/`completion_tokens`/`total_tokens`
+  and `model` to IAM `/v1/usage/ingest`. `/v1/usage/summary` exposes
+  `totals.promptTokens|completionTokens|totalTokens` and a `models[]` breakdown,
+  so Tier-2/Tier-3 can price or cap AI usage.
+- Set `INFERENCE_USAGE_REPORTING=false` only if an external meter owns accounting.

@@ -273,4 +273,47 @@ describe('synapseone cli offline', () => {
     assert.equal(r.code, 1);
     assert.match(r.stderr + r.stdout, /network|HTTP/);
   });
+
+  it('rejects a 200 HTML SPA response instead of printing it', async () => {
+    const spa = http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<!doctype html><html><body>console</body></html>');
+    });
+    await new Promise((resolve) => spa.listen(0, '127.0.0.1', resolve));
+    try {
+      const base = `http://127.0.0.1:${spa.address().port}`;
+      const r = await run('--base', base, 'orgs');
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /non-JSON response/);
+      assert.match(r.stderr, /api\.synapseone\.space/);
+      assert.ok(!r.stdout.includes('<!doctype html>'), 'must not print the SPA');
+    } finally {
+      await new Promise((resolve) => spa.close(resolve));
+    }
+  });
+
+  it('health --ready reports upstreams and exits 3 when degraded', async () => {
+    const gw = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.url === '/ready') {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ status: 'degraded', service: 'gateway', version: '0', upstreams: [{ name: 'base', ok: false, status: 502 }] }));
+        return;
+      }
+      res.end(JSON.stringify({ status: 'ok', service: 'gateway', version: '0' }));
+    });
+    await new Promise((resolve) => gw.listen(0, '127.0.0.1', resolve));
+    try {
+      const base = `http://127.0.0.1:${gw.address().port}`;
+      const ok = await run('--base', base, 'health');
+      assert.equal(ok.code, 0);
+      assert.match(ok.stdout, /status: ok/);
+      const degraded = await run('--base', base, 'health', '--ready');
+      assert.equal(degraded.code, 3);
+      assert.match(degraded.stdout, /degraded/);
+      assert.match(degraded.stdout, /FAIL base/);
+    } finally {
+      await new Promise((resolve) => gw.close(resolve));
+    }
+  });
 });

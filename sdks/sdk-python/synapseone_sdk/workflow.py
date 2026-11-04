@@ -16,7 +16,7 @@ from urllib.parse import quote, urlencode
 
 import requests
 
-from ._http import HttpClient, SynapseOneError
+from ._http import WEBHOOK_TIMEOUT, HttpClient, SynapseOneError
 
 
 def unwrap_executions(payload: Any) -> list:
@@ -213,7 +213,13 @@ class WorkflowService:
         if not clean:
             raise SynapseOneError("synapseone webhook: path required")
         verb = (method or ("GET" if payload is None else "POST")).upper()
-        return self._http.request(verb, f"/webhook/{clean}", payload)
+        return self._http.request(
+            verb,
+            f"/webhook/{clean}",
+            payload,
+            timeout=WEBHOOK_TIMEOUT,
+            retryable=True,
+        )
 
 
 def trigger_webhook(
@@ -221,13 +227,13 @@ def trigger_webhook(
     path: str,
     payload: Any | None = None,
     method: str | None = None,
-    timeout: int = 15,
+    timeout: int = WEBHOOK_TIMEOUT,
 ) -> Any:
     """Fire a public inbound webhook: ANY /webhook/:path (no auth).
 
     Triggers the ACTIVE workflow whose webhook node declares that ``path``.
-    NOTE: the gateway does not proxy /webhook/* — pass the workflow-service
-    origin (e.g. "http://localhost:4002"), not the gateway URL.
+    The gateway proxies ``/webhook/*`` to the workflow service; the 300s
+    gateway budget is the default timeout.
     """
     clean = str(path or "").strip("/").split("?")[0]
     if not clean:

@@ -34,7 +34,7 @@ import (
 )
 
 func main() {
-    c := synapseone.New("") // defaults to https://synapseone.space
+    c := synapseone.New("") // defaults to https://api.synapseone.space
 
     // Login (dev login or seed)
     out, err := c.Login("demo@acme.local", "acme")
@@ -55,7 +55,7 @@ func main() {
 ## Client construction
 
 ### `New(baseURL string) *Client`
-Creates a client with a 15-second timeout. If `baseURL` is empty (`""`), it resolves from `SYNAPSEONE_BASE_URL` or defaults to `https://synapseone.space`.
+Creates a client with a 15-second timeout. If `baseURL` is empty (`""`), it resolves from `SYNAPSEONE_BASE_URL` or defaults to `https://api.synapseone.space`.
 
 ```go
 c := synapseone.New("") // or synapseone.NewDefault()
@@ -920,3 +920,17 @@ func main() {
     fmt.Println("Execution:", exec["id"])
 }
 ```
+
+
+## 0.7.x additions
+
+- `Register`, `LoginWithPassword`, `ChangePassword`, `RequestPasswordReset`,
+  `ResetPassword`, `VerifyEmail`, `RequestEmailVerification`, `ListSessions`,
+  `RevokeSession`, `ExchangeToken` (Tier-2 delegated identity).
+- `PutObject`/`GetObject`/`HeadObject`/`DeleteObject`/`ListObjects`/`Presign`
+  plus multipart helpers.
+- `SendNotification`/`GetNotification`/`ListNotifications`/`CancelNotification`
+  and preference/unsubscribe methods.
+- `Health`, `Ready` (returns the degraded payload on 503), `ReadyStrict`.
+- Typed `APIError` with `StatusCode`/`Code`; idempotent retries on 429/502/503/504
+  honour `Retry-After`; per-call timeout via `doWithTimeout`.

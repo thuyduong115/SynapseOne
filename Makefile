@@ -15,6 +15,7 @@ bootstrap:
 	cp -n .env.example .env || copy .env.example .env
 	npm install --workspaces
 	cd sdks/sdk-python && pip install -e . || true
+	cd apps/inference-service && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt || true
 
 build:
 	npm run build --workspaces --if-present

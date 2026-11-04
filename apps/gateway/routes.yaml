@@ -128,4 +128,14 @@ routes:
     target: ${STREAM_SERVICE_URL:http://stream:4009}
     auth: either
 
+  # SynapseObjectStorage — tenant-scoped object/file storage (S3-compatible).
+  - path: /v1/storage
+    target: ${STORAGE_SERVICE_URL:http://storage:4010}
+    auth: either
+
+  # SynapseNotifications — outbox, templates, preferences and delivery.
+  - path: /v1/notifications
+    target: ${NOTIFICATIONS_SERVICE_URL:http://notifications:4011}
+    auth: either
+
 

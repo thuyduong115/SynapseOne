@@ -57,11 +57,55 @@ export interface AccessClaims {
   account?: string; // account id
   scopes?: string[];
   kind?: string;
+  /** Delegated token: the service identity that acted for the user. */
+  act?: { sub: string; kind?: string };
+  /** Delegation marker + audience (Tier-2 service). */
+  delegated?: boolean;
+  aud?: string;
 }
 
-export function signAccess(claims: AccessClaims): { token: string; expiresIn: number } {
-  const token = jwt.sign({ ...claims, iss: 'synapseone-iam', kind: claims.kind || 'user' }, JWT_SECRET, { expiresIn: ACCESS_TTL });
-  return { token, expiresIn: ACCESS_TTL };
+export function signAccess(
+  claims: AccessClaims,
+  opts: { expiresIn?: number; audience?: string } = {},
+): { token: string; expiresIn: number } {
+  const expiresIn = Math.min(Math.max(Math.floor(opts.expiresIn ?? ACCESS_TTL), 60), 86_400);
+  const kind = claims.kind || 'user';
+  // Org-member user tokens carry full authority; narrow credentials (service
+  // accounts, delegated tokens) pass scopes explicitly and are never widened.
+  const scopes = claims.scopes ?? (kind === 'user' ? ['*'] : []);
+  const payload: Record<string, unknown> = { ...claims, scopes, iss: 'synapseone-iam', kind };
+  if (opts.audience) payload.aud = opts.audience;
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn });
+  return { token, expiresIn };
+}
+
+/**
+ * Sign a short-lived delegated token for a specific user (issue #22).
+ * `act` records the service identity that requested it; the audit trail uses
+ * the same fields. TTL is capped at 1h so a leaked token expires quickly.
+ */
+export function signDelegated(input: {
+  userId: string;
+  org: string;
+  account: string;
+  scopes: string[];
+  actor: string;
+  actorKind?: string;
+  audience?: string;
+  ttlSeconds?: number;
+}): { token: string; expiresIn: number } {
+  return signAccess(
+    {
+      sub: input.userId,
+      org: input.org,
+      account: input.account,
+      scopes: input.scopes,
+      kind: 'delegated',
+      delegated: true,
+      act: { sub: input.actor, kind: input.actorKind || 'service-account' },
+    },
+    { expiresIn: input.ttlSeconds ?? 900, audience: input.audience },
+  );
 }
 
 export function verifyAccess(token: string): AccessClaims {
@@ -93,7 +137,7 @@ export async function storeRefresh(userId: string, hash: string, expiresAt: Date
     await db.insert(refreshTokens).values({ userId, tokenHash: hash, expiresAt });
     return;
   }
-  __mem.refresh.set(hash, { user_id: userId, expires_at: expiresAt.toISOString(), revoked_at: null });
+  __mem.refresh.set(hash, { id: randomUUID(), user_id: userId, expires_at: expiresAt.toISOString(), revoked_at: null, created_at: new Date().toISOString() });
 }
 
 export async function consumeRefresh(value: string): Promise<{ user_id: string } | null> {
@@ -213,8 +257,64 @@ export async function revokeAllRefresh(userId: string): Promise<number> {
   return n;
 }
 
-export async function createApiKeyRecord(accountId: string, userId: string | null, name: string, scopes: string[], expiresAt: Date | null): Promise<{ id: string; value: string; prefix: string }> {
-  const raw = 'synapseone_' + randomBytes(24).toString('base64url');
+/** Session metadata (refresh-token rows) for the account-security UI. */
+export interface RefreshSession {
+  id: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string | null;
+}
+
+export async function listRefreshSessions(userId: string): Promise<RefreshSession[]> {
+  if (useDb()) {
+    const db = getDb()!;
+    await ensureTables();
+    const rows = await db.select({
+      id: refreshTokens.id,
+      expiresAt: refreshTokens.expiresAt,
+      revokedAt: refreshTokens.revokedAt,
+      createdAt: refreshTokens.createdAt,
+    }).from(refreshTokens)
+      .where(eq(refreshTokens.userId, userId))
+      .orderBy(desc(refreshTokens.createdAt))
+      .limit(200);
+    return rows.map((r) => ({
+      id: r.id,
+      expires_at: iso(r.expiresAt),
+      revoked_at: iso(r.revokedAt),
+      created_at: iso(r.createdAt),
+    }));
+  }
+  const out: RefreshSession[] = [];
+  for (const rec of __mem.refresh.values()) {
+    if (rec.user_id === userId) {
+      out.push({ id: rec.id || '', expires_at: rec.expires_at || null, revoked_at: rec.revoked_at || null, created_at: rec.created_at || null });
+    }
+  }
+  return out;
+}
+
+/** Revoke one session owned by the user (id is the refresh-token row id). */
+export async function revokeRefreshById(userId: string, id: string): Promise<boolean> {
+  if (useDb()) {
+    const db = getDb()!;
+    await ensureTables();
+    const rows = await db.update(refreshTokens)
+      .set({ revokedAt: sql`now()` })
+      .where(and(eq(refreshTokens.id, id), eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+      .returning({ id: refreshTokens.id });
+    return rows.length > 0;
+  }
+  for (const rec of __mem.refresh.values()) {
+    if (rec.user_id === userId && rec.id === id && !rec.revoked_at) {
+      rec.revoked_at = new Date().toISOString();
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function createApiKeyRecord(accountId: string, userId: string | null, name: string, scopes: string[], expiresAt: Date | null): Promise<{ id: string; value: string; prefix: string }> {  const raw = 'synapseone_' + randomBytes(24).toString('base64url');
   const prefix = raw.slice(0, 12);
   const hash = hashSecret(raw);
   if (useDb()) {

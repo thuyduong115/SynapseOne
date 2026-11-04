@@ -196,3 +196,81 @@ async def test_chat_completions_mocked():
             data = res.json()
             assert data["id"] == "gen-12345"
             assert data["choices"][0]["message"]["content"] == "I am SynapseOne AI."
+
+
+def test_chat_completions_stream_sse():
+    """stream=true must return an SSE event stream, not a buffered JSON body."""
+
+    async def fake_stream(req, cfg=None):
+        yield 'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+        yield 'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+        yield "data: [DONE]\n\n"
+
+    with patch.object(settings, "OPENROUTER_API_KEY", "mock_key"):
+        with patch("src.main.stream_chat_completion", new=fake_stream):
+            with client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                },
+                headers=auth_headers(),
+            ) as res:
+                assert res.status_code == 200
+                assert res.headers["content-type"].startswith("text/event-stream")
+                text = "".join(res.iter_text())
+    assert 'data: {"choices":[{"delta":{"content":"Hel"}}]}' in text
+    assert text.strip().endswith("data: [DONE]")
+
+
+def test_chat_completions_stream_without_key_emits_error_frame():
+    with patch.object(settings, "OPENROUTER_API_KEY", ""):
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+            headers=auth_headers(),
+        ) as res:
+            # SSE always opens with 200; the failure arrives as an error frame.
+            assert res.status_code == 200
+            text = "".join(res.iter_text())
+    assert "OPENROUTER_API_KEY" in text
+    assert "data: [DONE]" in text
+
+
+def test_inference_health_reports_components():
+    res = client.get("/v1/inference/health", headers=auth_headers())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["components"]["embedding"]["dimension"] == 384
+    assert "loaded" in body["components"]["decision"]
+
+
+@pytest.mark.asyncio
+async def test_chat_reports_token_usage_to_iam():
+    """#26: prompt/completion tokens are metered through IAM usage ingest."""
+    mock_resp = {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "vendor/test-model",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
+    }
+    reporter = AsyncMock()
+    with patch.object(settings, "OPENROUTER_API_KEY", "mock_key"):
+        with patch("src.main.call_chat_completion", new=AsyncMock(return_value=mock_resp)):
+            with patch("src.main.report_usage", new=reporter):
+                res = client.post(
+                    "/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "hello"}]},
+                    headers={**auth_headers(), "x-synapseone-org": "11111111-1111-4111-8111-111111111111"},
+                )
+    assert res.status_code == 200
+    reporter.assert_awaited_once()
+    kwargs = reporter.await_args.kwargs
+    assert kwargs["prompt_tokens"] == 7
+    assert kwargs["completion_tokens"] == 11
+    assert kwargs["total_tokens"] == 18
+    assert kwargs["model"] == "vendor/test-model"

@@ -72,9 +72,13 @@ SYNAPSEONE_BASE_URL=http://localhost:8080 node tests/e2e/inference-check.js
 
 - E2E creates fixed slugs (`e2e`, `sdkacc`, `pyfull`, `ci-workflow`); reset the
   DB (`docker compose down -v`) before rerunning.
-- Python SDK: `pytest sdks/sdk-python -q`; inference:
-  `npm run test:inference` (or `pytest apps/inference-service/tests`).
+- Python SDK: `pytest sdks/sdk-python -q`; inference: `npm run test:inference`
+  (it creates `apps/inference-service/.venv` and installs `requirements.txt`
+  when needed, then runs pytest). CI installs the same requirements and runs
+  `pytest apps/inference-service/tests`.
 - Go SDK: `go vet ./... && go test ./...` in `sdks/sdk-go`.
+- New services in 0.7.0: `storage` (:4010) and `notifications` (:4011); both have
+  fail-closed production guards and are in Compose/K8s/`/ready`.
 - CI also runs `node tools/catalog-check.mjs`, which asserts the Console
   endpoint list, AI catalog, and `docs/api.md` stay in sync. Update all three
   when adding a public endpoint.
@@ -216,7 +220,7 @@ Version bumps touch every `package.json`, Compose image tags, SDK versions, and
 | 401 on internal call | missing/wrong `x-synapseone-internal`; secret mismatch |
 | 403 cross-tenant | expected; verify stamped org/account and service scope |
 | 409 on Base write | `ifVersion`/`If-Match` stale; re-read then retry |
-| 413 Base query | `BASE_QUERY_SCAN_LIMIT` exceeded; narrow filter/index |
+| 413 Base query | only the in-memory fallback (`BASE_QUERY_SCAN_LIMIT`); Postgres uses query pushdown |
 | Workflow webhook 401 | per-workflow auth mode/header/credential |
 | Workflow 500 on code node | sandbox timeout/permission error; check execution node run |
 | Queue duplicates | at-least-once; add dedupe key / idempotent handler |

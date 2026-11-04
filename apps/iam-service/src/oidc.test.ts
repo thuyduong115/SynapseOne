@@ -13,7 +13,7 @@ import http from 'node:http';
 import { generateKeyPairSync, createPublicKey, createHmac } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { createApp } from './index';
-import { __clearOidcCache } from './oidc';
+import { __clearOidcCache, assertOidcConfig, isPublicHttpsUrl } from './oidc';
 import { getJwtSecret } from './tokens';
 
 let base = '';
@@ -268,10 +268,11 @@ describe('oidc authorization code flow (stub IdP)', () => {
     const stub = await startStubIdp('RS256', { wrongIssuer: true });
     try {
       setIdp(stub.url);
+      // /start now resolves the authorize endpoint from discovery, so the
+      // mismatch is caught before the browser is redirected.
       const start = await call('GET', '/v1/auth/oidc/start?org=ssoorg');
-      const r = await call('POST', '/v1/auth/oidc/callback', { code: 'x', state: start.data.state });
-      assert.equal(r.status, 502);
-      assert.equal(r.data.error, 'oidc_issuer_mismatch');
+      assert.equal(start.status, 502);
+      assert.equal(start.data.error, 'oidc_issuer_mismatch');
     } finally {
       await stub.close();
     }
@@ -314,8 +315,63 @@ describe('oidc config', () => {
       assert.ok(r.data.issuer);
       assert.equal(r.data.clientId, 'test-client');
       assert.equal(r.data.codeExchange, true);
+      // A loopback stub is intentionally not browser-public.
+      assert.equal(r.data.issuerPublic, false);
+      assert.equal(typeof r.data.demoCallback, 'boolean');
     } finally {
       await stub.close();
     }
+  });
+
+  it('reports a public HTTPS issuer as browser-reachable (no discovery needed)', async () => {
+    const saved = process.env.OIDC_ISSUER;
+    try {
+      process.env.OIDC_ISSUER = 'https://auth.example.com/application/o/synapseone/';
+      const r = await call('GET', '/v1/auth/oidc/config');
+      assert.equal(r.status, 200);
+      assert.equal(r.data.issuer, 'https://auth.example.com/application/o/synapseone/');
+      assert.equal(r.data.issuerPublic, true);
+      assert.ok(!/authentik-server|localhost|127\.0\.0\.1/.test(String(r.data.issuer)));
+    } finally {
+      if (saved === undefined) delete process.env.OIDC_ISSUER;
+      else process.env.OIDC_ISSUER = saved;
+    }
+  });
+});
+
+
+describe('OIDC production configuration (#21)', () => {
+  it('accepts only public HTTPS issuers', () => {
+    assert.equal(isPublicHttpsUrl('https://auth.example.com/application/o/synapseone/'), true);
+    assert.equal(isPublicHttpsUrl('http://auth.example.com/'), false);
+    assert.equal(isPublicHttpsUrl('https://authentik-server:9000/application/o/synapseone/'), false);
+    assert.equal(isPublicHttpsUrl('https://authentik-server/application/o/synapseone/'), false);
+    assert.equal(isPublicHttpsUrl('https://127.0.0.1/'), false);
+    assert.equal(isPublicHttpsUrl('https://10.0.0.5/'), false);
+    assert.equal(isPublicHttpsUrl('https://192.168.1.10/'), false);
+    assert.equal(isPublicHttpsUrl('https://172.20.0.4/'), false);
+    assert.equal(isPublicHttpsUrl('https://idp.svc/'), false);
+    assert.equal(isPublicHttpsUrl('https://localhost/'), false);
+  });
+
+  it('fails boot in production with an internal issuer, weak secret or non-public redirect', () => {
+    const base = {
+      NODE_ENV: 'production',
+      OIDC_ISSUER: 'https://auth.example.com/application/o/synapseone/',
+      OIDC_CLIENT_ID: 'synapseone-platform',
+      OIDC_CLIENT_SECRET: 's3cret',
+      OIDC_REDIRECT_URI: 'https://cloud.example.com/oidc/callback',
+    } as NodeJS.ProcessEnv;
+    assert.doesNotThrow(() => assertOidcConfig(base));
+    assert.throws(
+      () => assertOidcConfig({ ...base, OIDC_ISSUER: 'http://authentik-server:9000/application/o/synapseone/' }),
+      /public HTTPS/,
+    );
+    assert.throws(() => assertOidcConfig({ ...base, OIDC_ISSUER: '' }), /public HTTPS/);
+    assert.throws(() => assertOidcConfig({ ...base, OIDC_CLIENT_ID: '' }), /OIDC_CLIENT_ID/);
+    assert.throws(() => assertOidcConfig({ ...base, OIDC_CLIENT_SECRET: 'change_me_oidc_secret' }), /OIDC_CLIENT_SECRET/);
+    assert.throws(() => assertOidcConfig({ ...base, OIDC_REDIRECT_URI: 'http://localhost:3000/oidc/callback' }), /OIDC_REDIRECT_URI/);
+    assert.throws(() => assertOidcConfig({ ...base, OIDC_REDIRECT_URI: 'https://iam.internal/oidc/callback' }), /OIDC_REDIRECT_URI/);
+    assert.doesNotThrow(() => assertOidcConfig({ ...base, NODE_ENV: 'development' }));
   });
 });

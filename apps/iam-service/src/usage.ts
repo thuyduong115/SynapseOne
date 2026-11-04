@@ -43,6 +43,10 @@ export interface UsageEventInput {
   orgId?: string | null;
   accountId?: string | null;
   userId?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+  model?: string | null;
   error?: string | null;
 }
 
@@ -61,6 +65,10 @@ export interface UsageEventRow {
   accountId: string | null;
   userId: string | null;
   userEmail?: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  model: string | null;
   error: string | null;
 }
 
@@ -90,6 +98,9 @@ export interface UsageTotals {
   uniqueUsers: number;
   uniqueAccounts: number;
   lastRequestAt: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
 export interface UsageFeatureStat {
@@ -129,6 +140,13 @@ export interface UsageSummary {
     errors: number;
     avgMs: number;
   }>;
+  models: Array<{
+    model: string;
+    requests: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  }>;
 }
 
 interface NormalizedEvent {
@@ -144,6 +162,10 @@ interface NormalizedEvent {
   orgId: string | null;
   accountId: string | null;
   userId: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  model: string | null;
   error: string | null;
 }
 
@@ -183,6 +205,10 @@ function normalizeEvent(input: UsageEventInput, now = Date.now()): NormalizedEve
 
   const authKind = AUTH_KINDS.has(String(input.authKind)) ? String(input.authKind) : 'unknown';
   const error = input.error == null ? null : clean(input.error, 500) || null;
+  const promptTokens = intInRange(input.promptTokens, 0, 100_000_000) ?? 0;
+  const completionTokens = intInRange(input.completionTokens, 0, 100_000_000) ?? 0;
+  const totalTokens = intInRange(input.totalTokens, 0, 200_000_000) ?? (promptTokens + completionTokens);
+  const model = input.model == null ? null : clean(input.model, 200) || null;
 
   return {
     createdAt: eventDate(input.createdAt, now),
@@ -197,6 +223,10 @@ function normalizeEvent(input: UsageEventInput, now = Date.now()): NormalizedEve
     orgId: uuidOrNull(input.orgId),
     accountId: uuidOrNull(input.accountId),
     userId: uuidOrNull(input.userId),
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    model,
     error,
   };
 }
@@ -314,6 +344,10 @@ export async function ingestUsageEvents(events: UsageEventInput[]): Promise<numb
         orgId: r.orgId,
         accountId: r.accountId,
         userId: r.userId,
+        promptTokens: r.promptTokens,
+        completionTokens: r.completionTokens,
+        totalTokens: r.totalTokens,
+        model: r.model,
         error: r.error,
       })),
     );
@@ -336,6 +370,10 @@ export async function ingestUsageEvents(events: UsageEventInput[]): Promise<numb
       accountId: r.accountId,
       userId: r.userId,
       userEmail: r.userId ? __mem.users.get(r.userId)?.email || null : null,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      totalTokens: r.totalTokens,
+      model: r.model,
       error: r.error,
     });
   }
@@ -374,6 +412,10 @@ export async function listUsageEvents(
         accountId: usageEvents.accountId,
         userId: usageEvents.userId,
         userEmail: users.email,
+        promptTokens: usageEvents.promptTokens,
+        completionTokens: usageEvents.completionTokens,
+        totalTokens: usageEvents.totalTokens,
+        model: usageEvents.model,
         error: usageEvents.error,
       })
       .from(usageEvents)
@@ -445,6 +487,9 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
         p95Ms: sql<number>`coalesce(percentile_cont(0.95) within group (order by ${usageEvents.durationMs}), 0)::float`,
         uniqueUsers: sql<number>`count(distinct ${usageEvents.userId})::int`,
         uniqueAccounts: sql<number>`count(distinct ${usageEvents.accountId})::int`,
+        promptTokens: sql<number>`coalesce(sum(${usageEvents.promptTokens}), 0)::bigint`,
+        completionTokens: sql<number>`coalesce(sum(${usageEvents.completionTokens}), 0)::bigint`,
+        totalTokens: sql<number>`coalesce(sum(${usageEvents.totalTokens}), 0)::bigint`,
         lastRequestAt: sql<Date | null>`max(${usageEvents.createdAt})`,
       })
       .from(usageEvents)
@@ -535,6 +580,20 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
       });
     }
 
+    const modelRows = await db
+      .select({
+        model: sql<string>`coalesce(${usageEvents.model}, '')`,
+        requests: sql<number>`count(*)::int`,
+        promptTokens: sql<number>`coalesce(sum(${usageEvents.promptTokens}), 0)::bigint`,
+        completionTokens: sql<number>`coalesce(sum(${usageEvents.completionTokens}), 0)::bigint`,
+        totalTokens: sql<number>`coalesce(sum(${usageEvents.totalTokens}), 0)::bigint`,
+      })
+      .from(usageEvents)
+      .where(where)
+      .groupBy(sql`coalesce(${usageEvents.model}, '')`)
+      .orderBy(desc(sql`coalesce(sum(${usageEvents.totalTokens}), 0)`))
+      .limit(20);
+
     return {
       from: f.from.toISOString(),
       to: f.to.toISOString(),
@@ -550,6 +609,9 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
         uniqueUsers: Number(t?.uniqueUsers) || 0,
         uniqueAccounts: Number(t?.uniqueAccounts) || 0,
         lastRequestAt: dateIso(t?.lastRequestAt),
+        promptTokens: Number(t?.promptTokens) || 0,
+        completionTokens: Number(t?.completionTokens) || 0,
+        totalTokens: Number(t?.totalTokens) || 0,
       },
       features: featureRows.map((r) => {
         const req = Number(r.requests) || 0;
@@ -578,6 +640,13 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
         requests: Number(r.requests) || 0,
         errors: Number(r.errors) || 0,
         avgMs: round2(Number(r.avgMs) || 0),
+      })),
+      models: modelRows.filter((r) => r.model).map((r) => ({
+        model: r.model,
+        requests: Number(r.requests) || 0,
+        promptTokens: Number(r.promptTokens) || 0,
+        completionTokens: Number(r.completionTokens) || 0,
+        totalTokens: Number(r.totalTokens) || 0,
       })),
     };
   }
@@ -661,6 +730,9 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
       uniqueUsers: new Set(events.map((e) => e.userId).filter(Boolean)).size,
       uniqueAccounts: new Set(events.map((e) => e.accountId).filter(Boolean)).size,
       lastRequestAt: last,
+      promptTokens: events.reduce((sum, e) => sum + (e.promptTokens || 0), 0),
+      completionTokens: events.reduce((sum, e) => sum + (e.completionTokens || 0), 0),
+      totalTokens: events.reduce((sum, e) => sum + (e.totalTokens || 0), 0),
     },
     features,
     series: fillSeries(f.from, f.to, bucketSeconds, points),
@@ -684,6 +756,17 @@ export async function usageSummary(f: UsageFilter): Promise<UsageSummary> {
       })
       .sort((a, b) => b.requests - a.requests)
       .slice(0, 10),
+    models: [...group((e) => e.model || '').entries()]
+      .filter(([model]) => !!model)
+      .map(([model, list]) => ({
+        model,
+        requests: list.length,
+        promptTokens: list.reduce((sum, e) => sum + (e.promptTokens || 0), 0),
+        completionTokens: list.reduce((sum, e) => sum + (e.completionTokens || 0), 0),
+        totalTokens: list.reduce((sum, e) => sum + (e.totalTokens || 0), 0),
+      }))
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .slice(0, 20),
   };
 }
 

@@ -43,6 +43,12 @@ export async function getStreamEngine(): Promise<StreamEngine> {
       targetEngineName = explicitEngine;
     } else if (redisUrl) {
       targetEngineName = 'redis';
+    } else if (isProd) {
+      // Never silently keep events in process memory in production.
+      throw new Error('[stream] In production one of STREAM_ENGINE or STREAM_REDIS_URL/REDIS_URL is required (no memory fallback)');
+    }
+    if (isProd && targetEngineName === 'memory') {
+      throw new Error('[stream] STREAM_ENGINE=memory is forbidden in production (events are lost on restart)');
     }
 
     let engine: StreamEngine;

@@ -37,6 +37,10 @@ jobs:
         working-directory: sdks/sdk-go
       - run: pip install "./sdks/sdk-python[dev]" && pip install pip-licenses && pip-licenses --fail-on="GPL;AGPL;LGPL"
       - run: pytest sdks/sdk-python -q
+      # Inference service: install its requirements and run pytest (#34).
+      # Failures block merge like every other workspace.
+      - run: pip install -r apps/inference-service/requirements.txt
+      - run: pytest apps/inference-service/tests -q
       - run: ruff check sdks/sdk-python apps/inference-service && ruff format --check sdks/sdk-python apps/inference-service
       - run: docker compose config
   docker:

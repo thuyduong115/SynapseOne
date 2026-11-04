@@ -17,6 +17,7 @@ from .llm import (
     call_chat_completion,
     stream_chat_completion,
 )
+from .usage import Timer, report_usage
 
 VERSION = "0.7.0"
 
@@ -28,13 +29,19 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# CORS configuration
+# CORS configuration: explicit allowlist in production (never wildcard), the
+# permissive default is dev/test only.
+_cors_origins = settings.cors_origins
+if not _cors_origins and settings.is_production:
+    raise RuntimeError(
+        "[inference] CORS_ORIGIN must be set in production (wildcard CORS is not allowed)."
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["authorization", "content-type", "x-api-key", "x-synapseone-internal", "x-request-id"],
 )
 
 
@@ -110,7 +117,7 @@ async def health():
 
 @app.post("/v1/chat/completions")
 @app.post("/v1/inference/chat/completions")
-async def chat_completions(req: ChatCompletionRequest):
+async def chat_completions(req: ChatCompletionRequest, request: Request):
     """OpenAI-compatible LLM Chat Completions endpoint (proxied to OpenRouter)."""
     if req.stream:
         return StreamingResponse(
@@ -123,8 +130,20 @@ async def chat_completions(req: ChatCompletionRequest):
             },
         )
 
+    timer = Timer()
     try:
         data = await call_chat_completion(req)
+        usage = data.get("usage") if isinstance(data, dict) else None
+        await report_usage(
+            request,
+            path="/v1/inference/chat/completions",
+            status_code=200,
+            duration_ms=timer.ms(),
+            model=data.get("model") if isinstance(data, dict) else req.model,
+            prompt_tokens=int((usage or {}).get("prompt_tokens") or 0),
+            completion_tokens=int((usage or {}).get("completion_tokens") or 0),
+            total_tokens=int((usage or {}).get("total_tokens") or 0),
+        )
         return data
     except LlmError as e:
         return JSONResponse(

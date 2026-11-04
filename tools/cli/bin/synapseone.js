@@ -43,7 +43,7 @@ function saveConfig(cfg) {
   try { fs.chmodSync(CONF_FILE, 0o600); } catch { /* non-POSIX (win) */ }
 }
 function baseUrl(opts) {
-  return (opts.base || process.env.SYNAPSEONE_BASE_URL || process.env.SYNAPSEDX_BASE_URL || loadConfig().baseUrl || 'https://synapseone.space').replace(/\/$/, '');
+  return (opts.base || process.env.SYNAPSEONE_BASE_URL || process.env.SYNAPSEDX_BASE_URL || loadConfig().baseUrl || 'https://api.synapseone.space').replace(/\/$/, '');
 }
 function authHeaders(opts) {
   const cfg = loadConfig();
@@ -75,6 +75,16 @@ async function req(method, p, body, opts) {
     data = text;
   }
   if (!r.ok) throw httpError(r.status, p, data);
+  // A 200 HTML page means the base URL is the console/marketing host, not the
+  // gateway. Surface it instead of printing the SPA as if it were data.
+  const ctype = String(r.headers.get('content-type') || '').toLowerCase();
+  const looksHtml = ctype.includes('text/html') || /^\s*(<!doctype html|<html)/i.test(String(data || ''));
+  if (looksHtml) {
+    throw new Error(
+      `non-JSON response from ${baseUrl(opts)}${p}: received HTML (status ${r.status}). ` +
+      'The base URL looks like the console host; use https://api.synapseone.space or pass --base.',
+    );
+  }
   return data;
 }
 function httpError(status, p, data) {
@@ -158,6 +168,7 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
+    else if (a === '--ready') opts.ready = true;
     else if (a === '--base' || a === '--token' || a === '--apikey') opts[a.slice(2)] = argv[++i];
     else if (a.startsWith('--base=')) opts.base = a.slice(7);
     else if (a.startsWith('--token=')) opts.token = a.slice(8);
@@ -306,6 +317,30 @@ async function cmdUseKey(o) {
 }
 async function cmdMe(o) {
   out(await GET('/v1/auth/me', o), o);
+}
+async function cmdHealth(o) {
+  const path = o.ready ? '/ready' : '/health';
+  const r = await fetch(baseUrl(o) + path, { headers: authHeaders(o) });
+  const text = await r.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`non-JSON response from ${baseUrl(o)}${path}: use https://api.synapseone.space`);
+  }
+  if (r.status >= 500 && r.status !== 503) throw httpError(r.status, path, data);
+  if (o.json) {
+    console.log(JSON.stringify(data, null, 2));
+  } else if (o.ready && data && Array.isArray(data.upstreams)) {
+    console.log(`status: ${data.status}  (${data.service || 'gateway'} v${data.version || '?'})`);
+    for (const u of data.upstreams) {
+      console.log(`  ${u.ok ? 'ok  ' : 'FAIL'} ${u.name}${u.status ? ` status=${u.status}` : ''}${typeof u.ms === 'number' ? ` ${u.ms}ms` : ''}`);
+    }
+  } else {
+    for (const [k, v] of Object.entries(data || {})) console.log(`${k}: ${fmt(v)}`);
+  }
+  // Degraded readiness is a non-zero exit so probes/scripts can gate on it.
+  if (o.ready && data && data.status !== 'ready') process.exitCode = 3;
 }
 async function cmdOrgs(o) {
   const [sub, ...rest] = o._;
@@ -915,6 +950,7 @@ const COMMANDS = {
   logout: { fn: async () => { saveConfig({ baseUrl: loadConfig().baseUrl }); console.log('logged out'); }, use: 'logout', doc: 'Clear saved credentials' },
   config: { fn: cmdConfig, use: 'config', doc: 'Show saved config (secrets redacted)' },
   whoami: { fn: cmdMe, use: 'whoami', doc: 'Current user (/v1/auth/me)' },
+  health: { fn: cmdHealth, use: 'health [--ready] [--json]', doc: 'Gateway /health or aggregate /ready (exit 3 when degraded)' },
   orgs: { fn: cmdOrgs, use: 'orgs [list|create <slug> [name]]', doc: 'Organizations' },
   accounts: { fn: cmdAccounts, use: 'accounts [org] [list] | accounts create [org] <slug> [name]', doc: 'Accounts' },
   users: { fn: cmdUsers, use: 'users [org] | users create <org> <email> [name] | users policies <user-id>', doc: 'Users + effective policies' },
@@ -944,7 +980,7 @@ function help() {
 
 Usage: synapseone [--base URL] [--token T | --apikey K] [--json] <command> [args]
 
-Auth defaults: --base > $SYNAPSEONE_BASE_URL > ~/.synapseone/config.json > https://synapseone.space
+Auth defaults: --base > $SYNAPSEONE_BASE_URL > ~/.synapseone/config.json > https://api.synapseone.space
 `);
   const names = Object.keys(COMMANDS);
   const w = Math.max(...names.map((n) => n.length));

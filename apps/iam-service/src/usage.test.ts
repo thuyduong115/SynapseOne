@@ -188,3 +188,36 @@ describe('usage analytics', () => {
     assert.equal((await call('GET', '/v1/usage/events?accountId=other', undefined, h)).status, 400);
   });
 });
+
+describe('inference token metering (#26)', () => {
+  it('records prompt/completion tokens per model and exposes them in the summary', async () => {
+    const ingest = await call('POST', '/v1/usage/ingest', {
+      events: [
+        {
+          feature: 'inference', route: '/v1/inference', method: 'POST', path: '/v1/inference/chat/completions',
+          status: 200, durationMs: 1200, authKind: 'user', orgId, accountId, userId,
+          promptTokens: 12, completionTokens: 30, totalTokens: 42, model: 'test/model-a',
+        },
+        {
+          feature: 'inference', route: '/v1/inference', method: 'POST', path: '/v1/inference/chat/completions',
+          status: 200, durationMs: 800, authKind: 'user', orgId, accountId, userId,
+          promptTokens: 5, completionTokens: 10, totalTokens: 15, model: 'test/model-b',
+        },
+      ],
+    });
+    assert.equal(ingest.status, 202, JSON.stringify(ingest.data));
+
+    const summary = await call('GET', `/v1/usage/summary?${rangeQs('&feature=inference')}`, undefined, { Authorization: `Bearer ${token}` });
+    assert.equal(summary.status, 200);
+    assert.equal(summary.data.totals.promptTokens, 17);
+    assert.equal(summary.data.totals.completionTokens, 40);
+    assert.equal(summary.data.totals.totalTokens, 57);
+    const models = summary.data.models;
+    assert.equal(models.length, 2);
+    assert.equal(models[0].model, 'test/model-a');
+    assert.equal(models[0].totalTokens, 42);
+
+    const events = await call('GET', `/v1/usage/events?${rangeQs('&feature=inference')}`, undefined, { Authorization: `Bearer ${token}` });
+    assert.ok(events.data.items.some((e: any) => e.model === 'test/model-a' && e.totalTokens === 42));
+  });
+});

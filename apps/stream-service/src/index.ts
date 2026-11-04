@@ -13,6 +13,7 @@ import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { timingSafeEqual } from 'crypto';
+import { auditMiddleware } from './audit';
 import { StreamError, TopicConfig, PublishInput } from './types';
 import { getStreamEngine, closeStreamEngine } from './engines';
 
@@ -105,7 +106,9 @@ export function resolveTenant(req: express.Request, caller: Caller): string {
 
 function verifyInternal(req: express.Request): boolean {
   const secret = process.env.SYNAPSEONE_INTERNAL_SECRET;
-  if (!secret) return true; // dev mode
+  // No secret = cannot verify. Dev relies on the fact that `createApp` only
+  // enforces this in production (and production aborts at boot without it).
+  if (!secret) return false;
   const h = (req.headers['x-synapseone-internal'] ?? req.headers['x-synapsedx-internal']);
   const val = (Array.isArray(h) ? h[0] : h || '').trim();
   if (!val || val.length !== secret.length) return false;
@@ -116,11 +119,38 @@ function verifyInternal(req: express.Request): boolean {
   }
 }
 
+/** Production must never run stream on a per-process memory log or wildcard CORS. */
+export function assertProductionConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.NODE_ENV !== 'production') return;
+  if (!env.SYNAPSEONE_INTERNAL_SECRET) {
+    throw new Error('[stream] SYNAPSEONE_INTERNAL_SECRET must be set in production (internal-only service).');
+  }
+  const engine = (env.STREAM_ENGINE || '').trim().toLowerCase();
+  const redisUrl = env.STREAM_REDIS_URL || env.REDIS_URL || '';
+  if (engine === 'memory') {
+    throw new Error('[stream] STREAM_ENGINE=memory is forbidden in production (events are lost on restart). Use redis or a durable engine.');
+  }
+  if (!engine && !redisUrl) {
+    throw new Error('[stream] In production one of STREAM_ENGINE or STREAM_REDIS_URL/REDIS_URL must be set (no memory fallback).');
+  }
+  const origins = (env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!origins.length) {
+    throw new Error('[stream] CORS_ORIGIN must be set in production (the default allows every origin).');
+  }
+}
+
 export function createApp(): express.Express {
+  assertProductionConfig();
   const app = express();
 
-  app.use(cors());
+  const corsOrigins = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!corsOrigins.length && !IS_PROD) {
+    console.warn('[stream][security] CORS_ORIGIN not set — allowing all origins (dev default). Set it in production.');
+  }
+  app.use(cors(corsOrigins.length ? { origin: corsOrigins } : undefined));
   app.use(express.json({ limit: '2mb' }));
+  // Data-plane mutation audit (#32): actor/tenant/action/result per write.
+  app.use(auditMiddleware('stream'));
   if (process.env.NODE_ENV !== 'test') {
     app.use(morgan('dev'));
   }

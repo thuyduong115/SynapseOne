@@ -57,7 +57,8 @@ Data services (same gateway, same tenant model):
   `synapseone_...` API keys (hash + prefix), service accounts for workloads.
 - **Core data cluster**: Postgres 16 (source of truth), Redis (cache/rate-limit/session,
   and the Faststore/Queue backends), S3Mock (S3-compatible object storage, bucket
-  `synapseone-core`; swap to MinIO/real S3 in production via `S3_ENDPOINT`).
+  `synapseone-core`; the storage service exposes it at `/v1/storage`; swap to
+  MinIO/real S3 in production via `STORAGE_S3_*`).
 - **Workflow**: local built-in engine (Apache-2.0, no external dependency); `workflow-service` owns
   workflows + executions in Postgres: DAG runner (webhook/cron/manual/http/code/set/if/noOp),
   sandboxed code, public webhooks, cron scheduler, definition editor.

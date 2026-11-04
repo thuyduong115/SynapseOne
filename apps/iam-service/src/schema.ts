@@ -53,6 +53,10 @@ export const users = pgTable(
     externalSub: text('external_sub'),
     email: text('email').notNull(),
     displayName: text('display_name'),
+    /** scrypt hash, null for OIDC-only / passwordless users. */
+    passwordHash: text('password_hash'),
+    emailVerified: boolean('email_verified').notNull().default(false),
+    passwordUpdatedAt: timestamp('password_updated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -60,6 +64,24 @@ export const users = pgTable(
     uniqueIndex('idx_users_external_sub').on(t.externalSub).where(sql`${t.externalSub} is not null`),
     uniqueIndex('idx_users_org_email_lower').on(t.orgId, sql`lower(${t.email})`),
     index('idx_users_org').on(t.orgId),
+  ],
+);
+
+/** Single-use password reset / email verification tokens (hashed at rest). */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    purpose: text('purpose').notNull().default('reset'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('password_reset_tokens_token_hash_key').on(t.tokenHash),
+    index('password_reset_tokens_user_idx').on(t.userId),
   ],
 );
 
@@ -201,6 +223,11 @@ export const usageEvents = pgTable(
     orgId: uuid('org_id'),
     accountId: uuid('account_id'),
     userId: uuid('user_id'),
+    // AI/inference metering (#26): tokens attributed per request/model.
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    model: text('model'),
     error: text('error'),
   },
   (t) => [
@@ -208,6 +235,7 @@ export const usageEvents = pgTable(
     index('idx_usage_org_time').on(t.orgId, t.createdAt.desc()),
     index('idx_usage_feature_time').on(t.feature, t.createdAt.desc()),
     index('idx_usage_status').on(t.status),
+    index('idx_usage_model_time').on(t.model, t.createdAt.desc()),
   ],
 );
 

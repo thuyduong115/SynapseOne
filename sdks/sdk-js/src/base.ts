@@ -346,6 +346,16 @@ export class BaseService {
     return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/documents${queryString({ limit: opts.limit, offset: opts.offset })}`);
   }
 
+  /** Paginated listing with an exact total and next cursor (#29 envelope). */
+  listDocumentsPage<T = Record<string, unknown>>(
+    collection: string,
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ items: Array<BaseDocument<T>>; total: number; limit: number; offset: number; nextCursor: string | null }> {
+    return this.http.req(
+      `/v1/base/collections/${encodeURIComponent(collection)}/documents${queryString({ limit: opts.limit, offset: opts.offset, withTotal: 1 })}`,
+    );
+  }
+
   increment<T = Record<string, unknown>>(
     collection: string,
     id: string,

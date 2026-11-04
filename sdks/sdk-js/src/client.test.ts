@@ -49,14 +49,17 @@ describe('SynapseOneClient', () => {
     assert.equal(SynapseDXError, SynapseOneError);
   });
 
-  it('defaults to https://synapseone.space', () => {
+  it('defaults to the public API gateway, not the console host', () => {
     const orig = process.env.SYNAPSEONE_BASE_URL;
+    const origLegacy = process.env.SYNAPSEDX_BASE_URL;
     delete process.env.SYNAPSEONE_BASE_URL;
+    delete process.env.SYNAPSEDX_BASE_URL;
     try {
       const c = new SynapseOneClient();
-      assert.equal((c as any).baseUrl, 'https://synapseone.space');
+      assert.equal((c as any).baseUrl, 'https://api.synapseone.space');
     } finally {
       if (orig !== undefined) process.env.SYNAPSEONE_BASE_URL = orig;
+      if (origLegacy !== undefined) process.env.SYNAPSEDX_BASE_URL = origLegacy;
     }
   });
 

@@ -32,7 +32,7 @@ type DecisionQuestion struct {
 
 // InferenceHealth returns the health and loaded status of inference subsystems.
 func (c *Client) InferenceHealth() (map[string]any, error) {
-	b, err := c.do("GET", "/v1/inference/health", nil)
+	b, err := c.doWithTimeout("GET", "/v1/inference/health", nil, InferenceTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (c *Client) InferenceChat(messages []ChatMessage, opts ...ChatCompletionOpt
 			body["top_p"] = o.TopP
 		}
 	}
-	b, err := c.do("POST", "/v1/inference/chat/completions", body)
+	b, err := c.doWithTimeout("POST", "/v1/inference/chat/completions", body, InferenceTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (c *Client) InferenceEmbeddings(input any, model ...string) (map[string]any
 	if len(model) > 0 && model[0] != "" {
 		body["model"] = model[0]
 	}
-	b, err := c.do("POST", "/v1/inference/embeddings", body)
+	b, err := c.doWithTimeout("POST", "/v1/inference/embeddings", body, InferenceTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (c *Client) InferenceDecision(state string, questions map[string]DecisionQu
 		"state":     state,
 		"questions": questions,
 	}
-	b, err := c.do("POST", "/v1/inference/decision", body)
+	b, err := c.doWithTimeout("POST", "/v1/inference/decision", body, InferenceTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (c *Client) InferenceRoute(input string, choices map[string]string, instruc
 	if len(instruction) > 0 && instruction[0] != "" {
 		body["instruction"] = instruction[0]
 	}
-	b, err := c.do("POST", "/v1/inference/decision/route", body)
+	b, err := c.doWithTimeout("POST", "/v1/inference/decision/route", body, InferenceTimeout)
 	if err != nil {
 		return nil, err
 	}

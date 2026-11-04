@@ -12,6 +12,7 @@ import path from 'node:path';
 import { buildTemplate, listTemplates, createApp, findWebhookPath, validateDefinition, normalizeDecisionChoices, workflowRunPrincipal, synapseoneCall, makeCredentialResolver } from './index';
 import { isBlockedUrl, runWorkflow } from './engine';
 import { __clearMem, createCredentialRec } from './store';
+import { __auditEvents, __clearAudit, mutationAction } from './audit';
 
 describe('workflow templates', () => {
   it('lists built-in templates', () => {
@@ -389,6 +390,47 @@ describe('workflow internal gate', () => {
     });
     assert.equal(r.status, 400);
     assert.equal((await r.json()).error, 'invalid_json');
+  });
+  it('records mutation audit with actor, tenant, action and result (#32)', async () => {
+    __clearAudit();
+    const H2 = {
+      'Content-Type': 'application/json',
+      'x-synapseone-internal': 'test-secret-123',
+      'x-synapseone-user': 'wf-user',
+      'x-synapseone-org': 'wf-org',
+      'x-synapseone-kind': 'user',
+    };
+    const created = await fetch(base + '/v1/workflows', {
+      method: 'POST', headers: H2,
+      body: JSON.stringify({ template: 'code-transform', name: 'audited-workflow' }),
+    });
+    assert.equal(created.status, 201);
+    await new Promise((r) => setImmediate(r));
+    const event = __auditEvents().find((e) => e.action === 'workflow:workflows:create');
+    assert.ok(event, JSON.stringify(__auditEvents()));
+    assert.equal(event.actorType, 'user');
+    assert.equal(event.actorId, 'wf-user');
+    assert.equal(event.orgId, 'wf-org');
+    assert.equal(event.result, 'allowed');
+    assert.equal(event.statusCode, 201);
+
+    const denied = await fetch(base + '/v1/workflows', {
+      method: 'POST', headers: H2,
+      body: JSON.stringify({ template: 'does-not-exist' }),
+    });
+    assert.equal(denied.status, 400);
+    await new Promise((r) => setImmediate(r));
+    const failed = __auditEvents().find((e) => e.action === 'workflow:workflows:create' && e.result === 'denied');
+    assert.ok(failed, JSON.stringify(__auditEvents()));
+    assert.equal(failed.statusCode, 400);
+
+    const before = __auditEvents().length;
+    await fetch(base + '/v1/workflows', { headers: H2 });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(__auditEvents().length, before, 'reads must not add mutation events');
+
+    const body = JSON.stringify(__auditEvents());
+    assert.ok(!body.includes('definition'), 'workflow bodies must not enter the audit trail');
   });
   it('explicit null name passes validation (local engine creates 201)', async () => {
     // Python SDK serializes missing name as null — must not 400.
@@ -1223,5 +1265,18 @@ describe('synapseone.api IAM service credential (#10)', () => {
     }
     // Missing service key: a clear, actionable error instead of a bare IAM 401.
     await assert.rejects(synapseoneCall('orgs', 'list', {}, null), /SYNAPSEONE_IAM_API_KEY/);
+  });
+});
+
+describe('mutation action naming (#32)', () => {
+  const req = (method: string, path: string) => ({ method, route: { path }, path, params: {} }) as any;
+  it('names workflow, credential and execution mutations', () => {
+    assert.equal(mutationAction('workflow', req('POST', '/v1/workflows')), 'workflow:workflows:create');
+    assert.equal(mutationAction('workflow', req('PUT', '/v1/workflows/:id')), 'workflow:workflows:update');
+    assert.equal(mutationAction('workflow', req('POST', '/v1/workflows/:id/execute')), 'workflow:workflows:execute');
+    assert.equal(mutationAction('workflow', req('DELETE', '/v1/workflows/:id')), 'workflow:workflows:delete');
+    assert.equal(mutationAction('workflow', req('POST', '/v1/credentials')), 'workflow:credentials:create');
+    assert.equal(mutationAction('workflow', req('POST', '/v1/credentials/:id/rotate')), 'workflow:credentials:rotate');
+    assert.equal(mutationAction('workflow', req('DELETE', '/v1/credentials/:id')), 'workflow:credentials:delete');
   });
 });

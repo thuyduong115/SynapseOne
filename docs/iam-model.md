@@ -10,8 +10,33 @@ Organization (globally unique slug, e.g. `acme`)
      ├─ User (belongs to an Org, granted Roles via user_roles — can span accounts)
      ├─ ApiKey (belongs to an Account, SHA-256 hash, prefix lookup)
      └─ ServiceAccount (machine identity)
-Global: audit_log records every authorize decision (see `GET /v1/audit`).
+Global: audit_log records authorize decisions, **every IAM mutation**
+(org/account/user/role/policy/key/service-account/password/token-exchange) and
+**data-plane mutations** from Base, Faststore, Queue, Stream, Workflow and LDS — see
+`GET /v1/audit`.
 ```
+
+### Audit trail (authorize + IAM + data plane)
+
+- IAM writes its own rows. The data-plane services post one event per non-GET
+  `/v1/*` write (`POST/PUT/PATCH/DELETE`) to the internal
+  `POST /v1/audit/ingest` endpoint in batches; the shared
+  `SYNAPSEONE_INTERNAL_SECRET` authenticates the producer and the gateway-stamped
+  headers supply actor/org/account. Reads (`query`, `vector-search`, `read`,
+  `contains`, `score`, `rank`, `search`) are not logged.
+- Each event carries `actorType` (`user`/`service`/`apikey`/`anonymous`),
+  `actorId`, `orgId`, `accountId`, `action` (`base:collections.documents:create`),
+  `resource` (route template), `result` (`allowed`/`denied`/`error`),
+  `statusCode` and `requestId`. `decision` stays the historical boolean
+  (`result === "allowed"`); the precise result is in `context.result`.
+- Privacy: request bodies, query strings, Authorization headers and secret-looking
+  path params (`key`, `token`, `secret`, `session`, …) are never recorded.
+- Events are buffered in memory (max 1000, flushed every 5 s, 100/batch) and a
+  failed ingest never fails the data write. Set `AUDIT_TRAIL=false` to disable.
+- `GET /v1/audit` is tenant-scoped: `from`, `to`, `action`, `resource`, `actor`,
+  `allowed`, `limit` (1..200) and `offset` (0..100 000). Machine callers without
+  an org see nothing. Set `AUDIT_RETENTION_DAYS` (e.g. `180`) for hourly purges;
+  export by paging the same filters (no bulk download endpoint).
 
 ## Policy JSON
 
@@ -51,22 +76,53 @@ forces `user/org/email` from the DB so callers can't spoof those keys. Dry-run t
 | Refresh | `synapseone_rt_...` opaque, **rotating** | 30 days | HMAC-SHA256 hash (with `IAM_API_KEY_PEPPER`; legacy SHA-256 still verifies) in `refresh_tokens`; single-use, revoked on logout |
 | API key | `synapseone_...` | optional/no expiry | HMAC-SHA256 hash (pepper, legacy fallback) in `api_keys` + prefix index, revoke with `DELETE /v1/keys/:id` |
 | Service account | Bearer JWT `kind=service-account` | 3600s | stateless, carries the `account` scope |
+| Delegated user token | Bearer JWT `kind=delegated` + `act` | 900s (60–3600) | short TTL, bound to one user/org/account with an audience and a scopes subset (`POST /v1/auth/exchange`) |
 
 Notes: access JWTs are stateless so they **can't be individually revoked** — keep a short
 TTL (1h) and revoke at the refresh layer (`/v1/auth/logout`, `/v1/auth/logout-all`). For
 instant revocation: rotate `IAM_JWT_SECRET` (restart iam+gateway, all old JWTs die).
 
-Current detail: API-key `scopes` are stored + returned on verify (`/v1/keys/verify`).
-The gateway only presence-checks at the edge by default (upstream verifies in detail); set
-`GATEWAY_VERIFY_APIKEY=true` for centralized gateway verification (with
-`x-synapseone-account`, `x-synapseone-scopes` propagated downstream). Per-route scope
-enforcement is a v0.2 item (see `ROADMAP.md`).
+### Scope enforcement (implemented)
+
+The gateway verifies API keys against IAM (`GATEWAY_VERIFY_APIKEY=true`, fail-closed)
+and then enforces a per-route scope:
+
+- scope grammar: `*`, `<service>:*`, `*:read`, `*:write`, `<service>:read|write`, or a
+  concrete verb (`faststore:get`, `workflow:execute`).
+- user JWTs carry `*` (org-member authority); API keys and delegated tokens are
+  narrow by construction and can only do what their scopes allow. A denied call is
+  `403 scope_denied` before the upstream sees it.
+- minting an API key or service-account token can never widen the caller's scopes:
+  a credential without `*` requesting an outside scope gets `403 scope_escalation`.
+  Omitting key scopes yields least-privilege `["*:read"]`, not `["*"]`.
+- `/v1/authorize` only evaluates users in the caller's org (`403 cross_tenant`
+  otherwise) and writes audit rows into the caller's org, never the target's.
+- `/v1/audit` supports `from/to`, `action`, `resource`, `actor`, `allowed`, `org`
+  (implicit), `limit` and `offset`.
+
+### First-party credential lifecycle (implemented)
+
+`POST /v1/auth/register`, `POST /v1/auth/login` (email+password), `POST /v1/auth/password/change`,
+`POST /v1/auth/password/forgot`, `POST /v1/auth/password/reset`,
+`POST /v1/auth/email/verify`, `GET /v1/auth/sessions`, `DELETE /v1/auth/sessions/:id`.
+Passwords are scrypt-hashed; reset/verification tokens are single-use and hashed at
+rest; changing/resetting a password revokes all refresh sessions. Registering into an
+**existing** org requires an invitation (an existing user row); a brand-new org is
+self-service unless `IAM_REGISTRATION_ALLOW_NEW_ORGS=false`.
+
+### Delegated identity for Tier 2 (implemented)
+
+`POST /v1/auth/exchange` takes a service-account token or API key plus
+`{userId, accountId?, orgId?, scopes?, audience?, ttlSeconds?}` and returns a
+short-lived token for that user. It refuses cross-tenant targets and scope
+escalation and audits every exchange. Tier 2 must use this instead of forwarding a
+Tier-3 HMAC token plus one shared service key.
 
 ## OIDC (Authentik / Keycloak)
 
 - `GET /v1/auth/oidc/config` — issuer/client (+ `codeExchange` capability flag).
-- `GET /v1/auth/oidc/start?org=<slug>` — builds the authorize URL with an HMAC-signed,
-  10-minute `state`.
+- `GET /v1/auth/oidc/start?org=<slug>` — resolves the authorize endpoint from the
+  IdP discovery document and appends an HMAC-signed, 10-minute `state`.
 - `POST /v1/auth/oidc/callback {code, state}` — **real** Authorization Code exchange:
   the code is redeemed at the IdP token endpoint and the ID token is verified against
   the IdP JWKS (asymmetric signature required, issuer + audience checked); a shadow
@@ -74,8 +130,10 @@ enforcement is a v0.2 item (see `ROADMAP.md`).
   are minted.
 - `POST /v1/auth/oidc/callback {email, orgSlug}` — **demo** mode (dev only): trusts the
   caller-supplied email. Disable in production (`IAM_ALLOW_OIDC_DEMO_CALLBACK=false`).
-- Switching to Keycloak only needs `OIDC_ISSUER=https://keycloak/realms/<realm>` + the
-  matching client — no code changes.
+- `OIDC_ISSUER` must be a **public HTTPS** URL in production (internal Docker hosts
+  are rejected at boot and discovery endpoints must be HTTPS on the issuer origin).
+- Switching to Keycloak only needs `OIDC_ISSUER=https://keycloak.example.com/realms/<realm>`
+  + the matching client — no code changes.
 
 ## End-to-end authorization example (via gateway — direct :4001 needs auth, see SECURITY.md)
 

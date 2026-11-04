@@ -64,7 +64,37 @@
       "require": "./dist/queue.js",
       "default": "./dist/queue.js"
     },
-    "./package.json": "./package.json"
+    "./stream": {
+      "types": "./dist/stream.d.ts",
+      "require": "./dist/stream.js",
+      "default": "./dist/stream.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "require": "./dist/ai.js",
+      "default": "./dist/ai.js"
+    },
+    "./inference": {
+      "types": "./dist/inference.d.ts",
+      "require": "./dist/inference.js",
+      "default": "./dist/inference.js"
+    },
+    "./health": {
+      "types": "./dist/health.d.ts",
+      "require": "./dist/health.js",
+      "default": "./dist/health.js"
+    },
+    "./package.json": "./package.json",
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "require": "./dist/storage.js",
+      "default": "./dist/storage.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "require": "./dist/notifications.js",
+      "default": "./dist/notifications.js"
+    }
   },
   "files": [
     "dist",
@@ -72,7 +102,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/client.test.js dist/services.test.js",
+    "test": "node --test dist/*.test.js",
     "lint": "echo lint-ok"
   },
   "dependencies": {},

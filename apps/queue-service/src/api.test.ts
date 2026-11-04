@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import type { Server } from 'http';
 import { createApp } from './index';
 import { __clearQueueMem } from './store';
+import { __auditEvents, __clearAudit } from './audit';
 
 let server: Server;
 let base = '';
@@ -53,6 +54,27 @@ test('health and metrics are served', async () => {
   const metrics = await fetch(`${base}/metrics`);
   assert.equal(metrics.status, 200);
   assert.match(await metrics.text(), /synapseone_queue_up 1/);
+});
+
+test('receipts are opaque capability tokens, not derivable from the message id', async () => {
+  await createQueue();
+  const pub = await call('POST', '/v1/queue/queues/jobs/messages', { payload: { n: 1 } });
+  const id = pub.json.message.id;
+  const first = await call('POST', '/v1/queue/queues/jobs/consume', { maxMessages: 1 });
+  const receipt = first.json.messages[0].receipt;
+  assert.ok(receipt);
+  assert.ok(!receipt.includes(id), 'receipt must not embed the public message id');
+  assert.doesNotMatch(receipt, /:\d+$/, 'receipt must not end with a sequence number');
+  assert.match(receipt, /^rcpt_[A-Za-z0-9_-]{20,}$/);
+  // A guessed id:seq receipt must never ack somebody else's lease.
+  const forged = await call('POST', '/v1/queue/queues/jobs/ack', { receipt: `${id}:1` });
+  assert.equal(forged.status, 404);
+  // Two consumes of different messages produce unrelated receipts.
+  await call('POST', '/v1/queue/queues/jobs/messages', { payload: { n: 2 } });
+  const again = await call('POST', '/v1/queue/queues/jobs/consume', { maxMessages: 1 });
+  assert.notEqual(again.json.messages[0].receipt, receipt);
+  const ok = await call('POST', '/v1/queue/queues/jobs/ack', { receipt });
+  assert.equal(ok.status, 200);
 });
 
 test('publish, peek, consume and ack', async () => {
@@ -319,4 +341,33 @@ test('authentication and validation', async () => {
 
   const badId = await call('POST', '/v1/queue/queues/jobs/messages', { payload: 1, id: 'bad/id' });
   assert.equal(badId.status, 400);
+});
+
+test('mutation audit records actor, tenant, action and result (#32)', async () => {
+  __clearAudit();
+  await createQueue();
+  const pub = await call('POST', '/v1/queue/queues/jobs/messages', { payload: { secret: 'super-secret-value' } });
+  assert.equal(pub.status, 201);
+  await new Promise((r) => setImmediate(r));
+
+  const event = __auditEvents().find((e) => e.action === 'queue:queues.messages:create');
+  assert.ok(event, JSON.stringify(__auditEvents()));
+  assert.equal(event.actorType, 'user');
+  assert.equal(event.actorId, 'user-1');
+  assert.equal(event.orgId, 'tenant-a');
+  assert.equal(event.result, 'allowed');
+  assert.equal(event.statusCode, 201);
+  assert.ok(!JSON.stringify(__auditEvents()).includes('super-secret-value'), 'message payloads must never enter the audit trail');
+
+  const denied = await call('POST', '/v1/queue/queues/missing/purge', {});
+  assert.equal(denied.status, 404);
+  await new Promise((r) => setImmediate(r));
+  const failed = __auditEvents().find((e) => e.action === 'queue:queues:purge' && e.result === 'denied');
+  assert.ok(failed, JSON.stringify(__auditEvents()));
+  assert.equal(failed.statusCode, 404);
+
+  const before = __auditEvents().length;
+  await call('GET', '/v1/queue/queues/jobs/stats');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(__auditEvents().length, before, 'reads must not add mutation events');
 });

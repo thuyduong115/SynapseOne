@@ -20,6 +20,7 @@ import WorkflowEditor from './components/WorkflowEditor.jsx';
 const ROUTES = [
   '/',
   '/login',
+  '/about',
   '/oidc/callback',
   '/dashboard',
   '/orgs',

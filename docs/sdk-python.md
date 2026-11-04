@@ -50,10 +50,11 @@ SynapseOneClient(base_url=None, token=None, api_key=None, timeout=15, tenant=Non
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `base_url` | `str \| None` | `'https://synapseone.space'` | Gateway URL, or `$SYNAPSEONE_BASE_URL` |
+| `base_url` | `str \| None` | `'https://api.synapseone.space'` | API gateway URL, or `$SYNAPSEONE_BASE_URL` |
 | `token` | `str \| None` | `None` | Bearer JWT (from login or service account) |
 | `api_key` | `str \| None` | `None` | API key sent as `X-API-Key` header |
-| `timeout` | `int` | `15` | Per-request timeout in seconds |
+| `timeout` | `int` | `15` | Default per-request timeout (inference gets 120s, webhooks 300s) |
+| `max_attempts` | `int` | `3` | Retries for idempotent requests on 429/502/503/504 |
 | `tenant` | `str \| None` | `None` | `x-synapseone-tenant`; platform callers only (Faststore/Queue) |
 
 ### Auth methods
@@ -803,3 +804,13 @@ def main():
 if __name__ == "__main__":
     main()
 ```
+
+
+## 0.7.x additions
+
+- `client.iam.register/login_with_password/change_password/request_password_reset/reset_password/verify_email/list_sessions/revoke_session` and `exchange_token` for Tier-2 delegated identity.
+- `client.storage` — `put_object/get_object/head_object/list_objects/delete_object/presign` + multipart.
+- `client.notifications` — `send/get/list/cancel/get_preference/set_preference/unsubscribe`.
+- `client.inference.chat_stream(...)` yields SSE `(event, data)`; `iter_text(...)` projects incremental text, `parse_chat_delta(data)` parses one frame.
+- `client.health.health()/ready()/status()`: `ready()` returns the degraded payload on 503 instead of raising (pass `throw_on_degraded=True` for strict probes).
+- Per-call transport: `client._http.request(..., timeout=..., max_attempts=...)`; a 2xx HTML body raises `SynapseOneError(code='non_json_response')`.

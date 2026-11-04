@@ -23,12 +23,15 @@ standard OIDC. Everything else is SynapseOne code, pure Apache-2.0.
 | Capability | What you get |
 |---|---|
 | **API Gateway** | Single entry point: JWT/API-key auth, principal propagation (`x-synapseone-*`), edge rate limiting, tracing, aggregate `/ready`, Prometheus `/metrics` |
-| **AWS-style IAM** | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), `authorize` API + dry-run simulator + audit log, tenant isolation on every write (role-based, same-org fallback) |
-| **Flexible identity** | Short-lived JWT, atomic rotating refresh tokens, API keys, service accounts, and real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
-| **Core data** | Postgres (source of truth) + Redis + S3-compatible object storage, versioned schema, idempotent seed |
+| **AWS-style IAM** | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), enforced per-route scopes, `authorize` API + dry-run simulator, mutation audit trail, tenant isolation on every write (role-based, same-org fallback) |
+| **Flexible identity** | First-party password lifecycle (register/login/change/reset/verify), short-lived JWT, atomic rotating refresh tokens, API keys, service accounts, delegated user-token exchange for Tier 2, and real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
+| **Core data** | Postgres (source of truth) + Redis + tenant-scoped S3-compatible object storage, versioned schema, idempotent seed |
 | **SynapseBase** | Self-managed document database: collections, object↔data mapping with validation, filters/cursors, optimistic concurrency, atomic counters, batches and a change feed (`/v1/base`) |
 | **Synapse Faststore** | Redis-backed cache/KV and data structures: TTL strings, counters, hashes, lists, sets, sorted sets, scans, batches and distributed locks (`/v1/faststore`) |
 | **SynapseQueue** | At-least-once messaging: delayed/deduplicated publishing, visibility-timeout leases, ack/nack/heartbeat, retries, dead letters and replay (`/v1/queue`) |
+| **SynapseStream** | Tenant-scoped event log over Redis Streams/Kafka with consumer groups, acks and retention (`/v1/stream`) |
+| **SynapseObjectStorage** | Tenant-scoped buckets/objects with direct + multipart upload, presigned URLs, checksums, size/type limits and quotas (`/v1/storage`) |
+| **SynapseNotifications** | Durable outbox + `{{var}}` templates, per-recipient preferences/unsubscribe, email/SMS/push relays, webhooks, retries and dead letters (`/v1/notifications`) |
 | **Workflows** | Built-in workflow engine (Apache-2.0): DAG runner, versioned templates, activate/deactivate/execute (real webhook & cron triggers), sandboxed code execution, execution history, visual graph editor |
 | **Linked Data (SynapseLDS)** | Licence-picked NGSI-LD datasources: structural-allowlist projection (`_core` never serialized), per-attribute visibility (public/restricted/internal), default-deny schema registry, workflow publish node (`lds.publish-record`) |
 | **AI assistant** | Chatbot on the API Docs page: decision model picks the endpoint, LLM pre-fills the try-it form (server-side key, guidance-only, never public) |
@@ -91,11 +94,15 @@ await c.faststore.set('cache:demo', { ok: true }, { ttlSeconds: 300 });
 await c.queue.publish('emails', { to: 'demo@acme.local' });
 ```
 
-All clients cover the full API (`docs/api.md`): auth/refresh/logout, orgs/accounts/users,
-roles/policies/attach/assign, authorize + dry-run, audit, API keys, service accounts,
-workflows/templates/executions, LDS, Base, Faststore and Queue. The SDKs are split
-per service namespace (`c.iam`, `c.workflow`, `c.lds`, `c.base`, `c.faststore`,
-`c.queue`); legacy flat methods still work with a deprecation warning.
+All clients cover the full API (`docs/api.md`): password lifecycle + OIDC,
+refresh/logout, delegated token exchange, orgs/accounts/users, roles/policies,
+authorize + dry-run, audit, API keys, service accounts, workflows/templates/
+executions, LDS, Base, Faststore, Queue, Stream, Object Storage, Notifications,
+AI and inference (streaming). The SDKs are split per service namespace
+(`c.iam`, `c.workflow`, `c.lds`, `c.base`, `c.faststore`, `c.queue`,
+`c.stream`, `c.storage`, `c.notifications`, `c.ai`, `c.inference`, `c.health`);
+legacy flat methods still work with a deprecation warning. See the parity
+matrix in `docs/sdk-js.md` for the few intentional differences.
 
 ## Self-host
 
@@ -124,12 +131,16 @@ Production (TLS, edge rate limiting, hardened secrets): `docker-compose.prod.yml
 ## Architecture
 
 ```
-Client → Gateway :8080 ─┬─► IAM :4001       (Org/Account/Role/Policy + tokens + OIDC)
-                         ├─► Workflow :4002  (built-in Apache-2.0 engine)
-                         ├─► LDS :4004       (licensed NGSI-LD exports)
-                         ├─► Base :4005      (documents + object↔data mapping)
-                         ├─► Faststore :4006 (cache/KV/data structures)
-                         └─► Queue :4007     (at-least-once messaging)
+Client → Gateway :8080 ─┬─► IAM :4001           (Org/Account/Role/Policy + tokens + OIDC)
+                         ├─► Workflow :4002      (built-in Apache-2.0 engine)
+                         ├─► AI :4003 / Inference :4008
+                         ├─► LDS :4004           (licensed NGSI-LD exports)
+                         ├─► Base :4005          (documents + object↔data mapping)
+                         ├─► Faststore :4006     (cache/KV/data structures)
+                         ├─► Queue :4007         (at-least-once messaging)
+                         ├─► Stream :4009        (event log / consumer groups)
+                         ├─► Storage :4010       (objects, multipart, presign)
+                         └─► Notifications :4011 (outbox + delivery)
                          Postgres :5432 / Redis :6379 / S3-compatible :9090
 ```
 
@@ -147,6 +158,9 @@ apps/lds-service           SynapseLDS — NGSI-LD datasources, registry, license
 apps/base-service          SynapseBase — documents, mapping, queries, change feed
 apps/faststore-service     Synapse Faststore — cache/KV, data structures, locks
 apps/queue-service         SynapseQueue — publish/consume, leases, retries, DLQ
+apps/stream-service        SynapseStream — topics, consumer groups, acks
+apps/storage-service       SynapseObjectStorage — objects, multipart, presign, quotas
+apps/notifications-service SynapseNotifications — outbox, templates, preferences
 sdks/sdk-js                @synapseone/sdk (TypeScript, zero runtime deps)
 sdks/sdk-python            synapseone-sdk (Python, requests only)
 sdks/sdk-go                synapseone-sdk-go (Go, stdlib only)
@@ -173,7 +187,8 @@ docs                       Start at docs/README.md
 | `docs/configuration.md` | Every environment variable |
 | `docs/production.md` | Production checklist (secrets, TLS, edge) |
 | `docs/console.md` | Operating the Console |
-| `docs/object-storage.md` | S3-compatible storage backends |
+| `docs/object-storage.md` | SynapseObjectStorage API + S3-compatible backends |
+| `docs/notifications.md` | SynapseNotifications — templates, preferences, delivery, retries |
 | `docs/troubleshooting.md` | Common failures and fixes |
 
 ## Common commands
