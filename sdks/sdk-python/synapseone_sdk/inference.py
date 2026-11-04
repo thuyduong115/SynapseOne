@@ -44,7 +44,9 @@ class InferenceService:
             body["temperature"] = temperature
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
-        return self._http.post(f"{_PREFIX}/chat/completions", body, timeout=INFERENCE_TIMEOUT)
+        return self._http.post(
+            f"{_PREFIX}/chat/completions", body, timeout=INFERENCE_TIMEOUT
+        )
 
     def chat_stream(
         self,
@@ -121,7 +123,9 @@ class InferenceService:
         body: dict[str, Any] = {"input": input_text, "choices": choices}
         if instruction:
             body["instruction"] = instruction
-        return self._http.post(f"{_PREFIX}/decision/route", body, timeout=INFERENCE_TIMEOUT)
+        return self._http.post(
+            f"{_PREFIX}/decision/route", body, timeout=INFERENCE_TIMEOUT
+        )
 
 
 __all__ = ["InferenceService", "parse_chat_delta"]

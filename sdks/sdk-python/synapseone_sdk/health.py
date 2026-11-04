@@ -40,7 +40,7 @@ class HealthService:
         try:
             health = self.health()
             reachable = bool(health.get("status"))
-        except SynapseOneError as e:
+        except SynapseOneError:
             health = {}
             reachable = False
         try:
@@ -49,7 +49,9 @@ class HealthService:
             ready = {}
         upstreams = ready.get("upstreams") if isinstance(ready, dict) else []
         return {
-            "ok": reachable and isinstance(ready, dict) and ready.get("status") == "ready",
+            "ok": reachable
+            and isinstance(ready, dict)
+            and ready.get("status") == "ready",
             "tier1": {
                 "status": health.get("status", "unreachable"),
                 "version": health.get("version"),

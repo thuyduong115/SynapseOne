@@ -537,7 +537,13 @@ def test_credential_lifecycle_and_delegated_exchange_paths():
         assert _seen["path"] == "/v1/auth/sessions"
         c.iam.revoke_session("s1")
         assert _seen["path"] == "/v1/auth/sessions/s1"
-        c.iam.exchange_token("u1", account_id="a1", scopes=["faststore:get"], audience="dx", ttl_seconds=300)
+        c.iam.exchange_token(
+            "u1",
+            account_id="a1",
+            scopes=["faststore:get"],
+            audience="dx",
+            ttl_seconds=300,
+        )
         assert _seen["path"] == "/v1/auth/exchange"
         body = json.loads(_seen["body"])
         assert body["userId"] == "u1"

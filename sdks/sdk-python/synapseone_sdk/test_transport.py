@@ -11,14 +11,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from synapseone_sdk import SynapseOneClient, SynapseOneError, iter_text, parse_chat_delta
+from synapseone_sdk import (
+    SynapseOneClient,
+    SynapseOneError,
+    iter_text,
+    parse_chat_delta,
+)
 from synapseone_sdk._http import DEFAULT_BASE_URL
 
 _hits: dict = {}
 
 
 class Transport(BaseHTTPRequestHandler):
-
     def _send(self):
         path = self.path.split("?")[0]
         _hits[path] = _hits.get(path, 0) + 1
@@ -43,11 +47,19 @@ class Transport(BaseHTTPRequestHandler):
             self.send_response(200)
         elif path == "/ready":
             payload = json.dumps(
-                {"status": "degraded", "service": "gateway", "version": "0", "upstreams": [{"name": "base", "ok": False}], "time": "t"}
+                {
+                    "status": "degraded",
+                    "service": "gateway",
+                    "version": "0",
+                    "upstreams": [{"name": "base", "ok": False}],
+                    "time": "t",
+                }
             ).encode()
             self.send_response(503)
         elif path == "/health":
-            payload = json.dumps({"status": "ok", "service": "gateway", "version": "0", "time": "t"}).encode()
+            payload = json.dumps(
+                {"status": "ok", "service": "gateway", "version": "0", "time": "t"}
+            ).encode()
             self.send_response(200)
         elif path == "/v1/inference/chat/completions":
             payload = b'data: {"choices":[{"delta":{"content":"he"}}]}\n\nevent: done\ndata: [DONE]\n\n'
@@ -147,6 +159,8 @@ def test_status_projection(server):
 
 def test_chat_stream_yields_deltas(server):
     c = SynapseOneClient(server)
-    chunks = list(iter_text(c.inference.chat_stream([{"role": "user", "content": "hi"}])))
+    chunks = list(
+        iter_text(c.inference.chat_stream([{"role": "user", "content": "hi"}]))
+    )
     assert chunks == ["he"]
     assert parse_chat_delta("[DONE]") is None

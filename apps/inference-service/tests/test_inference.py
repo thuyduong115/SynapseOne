@@ -255,17 +255,28 @@ async def test_chat_reports_token_usage_to_iam():
         "object": "chat.completion",
         "created": 1,
         "model": "vendor/test-model",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18},
     }
     reporter = AsyncMock()
     with patch.object(settings, "OPENROUTER_API_KEY", "mock_key"):
-        with patch("src.main.call_chat_completion", new=AsyncMock(return_value=mock_resp)):
+        with patch(
+            "src.main.call_chat_completion", new=AsyncMock(return_value=mock_resp)
+        ):
             with patch("src.main.report_usage", new=reporter):
                 res = client.post(
                     "/v1/chat/completions",
                     json={"messages": [{"role": "user", "content": "hello"}]},
-                    headers={**auth_headers(), "x-synapseone-org": "11111111-1111-4111-8111-111111111111"},
+                    headers={
+                        **auth_headers(),
+                        "x-synapseone-org": "11111111-1111-4111-8111-111111111111",
+                    },
                 )
     assert res.status_code == 200
     reporter.assert_awaited_once()

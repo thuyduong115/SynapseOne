@@ -90,7 +90,9 @@ class StorageService:
             {"key": key, "method": method, "expiresIn": expires_in},
         )
 
-    def create_multipart(self, key: str, content_type: str = "application/octet-stream") -> dict:
+    def create_multipart(
+        self, key: str, content_type: str = "application/octet-stream"
+    ) -> dict:
         return self._http.request(
             "POST", f"{_PREFIX}/uploads", {"key": key, "contentType": content_type}
         )
@@ -106,9 +108,7 @@ class StorageService:
             content_type="application/octet-stream",
         )
 
-    def complete_multipart(
-        self, upload_id: str, key: str, parts: list[dict]
-    ) -> dict:
+    def complete_multipart(self, upload_id: str, key: str, parts: list[dict]) -> dict:
         return self._http.request(
             "POST",
             f"{_PREFIX}/uploads/{quote(upload_id, safe='')}/complete",

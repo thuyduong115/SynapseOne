@@ -49,7 +49,9 @@ async def report_usage(
     """Send one usage event to IAM. Never raises."""
     if not settings.USAGE_REPORTING:
         return
-    total = total_tokens if total_tokens is not None else prompt_tokens + completion_tokens
+    total = (
+        total_tokens if total_tokens is not None else prompt_tokens + completion_tokens
+    )
     event = {
         "feature": "inference",
         "route": "/v1/inference",

@@ -31,7 +31,11 @@ class NotificationsService:
         idempotency_key: str | None = None,
     ) -> dict:
         """Queue a notification (one record per channel)."""
-        payload: dict[str, Any] = {"recipient": recipient, "body": body, "subject": subject}
+        payload: dict[str, Any] = {
+            "recipient": recipient,
+            "body": body,
+            "subject": subject,
+        }
         if channel:
             payload["channel"] = channel
         if channels:
@@ -77,4 +81,6 @@ class NotificationsService:
         )
 
     def unsubscribe(self, recipient: str) -> dict:
-        return self._http.request("POST", f"{_PREFIX}/unsubscribe", {"recipient": recipient})
+        return self._http.request(
+            "POST", f"{_PREFIX}/unsubscribe", {"recipient": recipient}
+        )

@@ -178,7 +178,9 @@ class HttpClient:
                     f"synapseone {r.status_code} {path}: {r.text[:500]} (base {self.base_url})",
                     status=r.status_code,
                     body=body_json,
-                    code=(body_json or {}).get("error") if isinstance(body_json, dict) else None,
+                    code=(body_json or {}).get("error")
+                    if isinstance(body_json, dict)
+                    else None,
                     base_url=self.base_url,
                 )
                 if retryable and r.status_code in _RETRYABLE and attempt < attempts:
@@ -197,7 +199,9 @@ class HttpClient:
             except ValueError:
                 return r.text  # non-JSON body (text/plain endpoints)
 
-        raise last or SynapseOneError(f"synapseone {path}: retries exhausted", base_url=self.base_url)
+        raise last or SynapseOneError(
+            f"synapseone {path}: retries exhausted", base_url=self.base_url
+        )
 
     def request_binary(
         self,
@@ -261,7 +265,10 @@ class HttpClient:
     def head(self, path: str, *, timeout: int | None = None) -> dict[str, str]:
         """HEAD request; returns lower-cased response headers."""
         r = requests.request(
-            "HEAD", self.base_url + path, headers=self.headers(), timeout=timeout or self.timeout
+            "HEAD",
+            self.base_url + path,
+            headers=self.headers(),
+            timeout=timeout or self.timeout,
         )
         if r.status_code >= 400:
             raise SynapseOneError(
@@ -339,7 +346,9 @@ def parse_chat_delta(data: str) -> str | None:
         return data
     try:
         choice = (j.get("choices") or [{}])[0]
-        delta = (choice.get("delta") or {}).get("content") or (choice.get("message") or {}).get("content")
+        delta = (choice.get("delta") or {}).get("content") or (
+            choice.get("message") or {}
+        ).get("content")
     except AttributeError:
         delta = None
     if isinstance(delta, str) and delta:
