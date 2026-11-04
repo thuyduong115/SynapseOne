@@ -9,6 +9,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import { createHmac } from 'crypto';
 import { z } from 'zod';
 import {
   createOrganization, listOrganizations, getOrgBySlug,
@@ -1470,6 +1471,46 @@ async function auditMutation(req: express.Request, action: string, resource: str
   // Audit log (đọc). Tenant-scoped (#7): only rows that targeted the caller's
   // org (context.org) or were triggered by the caller's org (context.callerOrg,
   // dry-runs). Callers without an org (machine tokens) see nothing.
+  app.get('/v1/audit/export', async (req, res) => {
+    const rawLimit = Number(req.query.limit || 10_000);
+    if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 10_000) {
+      return res.status(400).json({ error: 'invalid_limit', message: 'limit must be an integer 1..10000' });
+    }
+    const actor = (req.query.actor as string) || undefined;
+    if (actor !== undefined && !isUuid(actor)) return res.status(400).json({ error: 'invalid_actor', message: 'actor must be a UUID' });
+    const action = typeof req.query.action === 'string' && req.query.action.trim() ? req.query.action.trim().slice(0, 200) : undefined;
+    const resource = typeof req.query.resource === 'string' && req.query.resource.trim() ? req.query.resource.trim().slice(0, 512) : undefined;
+    const parseTime = (v: unknown): Date | undefined | 'invalid' => {
+      if (v === undefined || v === '') return undefined;
+      const d = new Date(String(v));
+      return Number.isFinite(d.getTime()) ? d : 'invalid';
+    };
+    const from = parseTime(req.query.from);
+    const to = parseTime(req.query.to);
+    if (from === 'invalid' || to === 'invalid') {
+      return res.status(400).json({ error: 'invalid_time', message: 'from/to must be valid ISO timestamps' });
+    }
+    const org = await resolveCallerOrg(req, TRUST_STAMPED);
+    if (!org) return res.status(403).json({ error: 'org_required', message: 'an organization-scoped credential is required' });
+    const rows: any[] = [];
+    for (let offset = 0; offset < rawLimit; offset += 200) {
+      const page = await queryAudit({
+        limit: Math.min(200, rawLimit - offset), offset, actor, orgId: org, action, resource, from, to,
+      });
+      rows.push(...page);
+      if (page.length < 200) break;
+    }
+    const ndjson = rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '');
+    const secret = process.env.AUDIT_EXPORT_SECRET || process.env.SYNAPSEONE_INTERNAL_SECRET || 'dev-audit-export-secret';
+    const digest = createHmac('sha256', secret).update(ndjson).digest('hex');
+    noStore(res);
+    res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="audit-${org}.ndjson"`);
+    res.setHeader('x-audit-digest', `hmac-sha256=${digest}`);
+    res.setHeader('x-audit-count', String(rows.length));
+    res.send(ndjson);
+  });
+
   app.get('/v1/audit', async (req, res) => {
     const limit = Number(req.query.limit || 50);
     const offset = Number(req.query.offset || 0);
