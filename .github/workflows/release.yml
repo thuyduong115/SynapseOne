@@ -100,23 +100,34 @@ jobs:
   publish-images:
     runs-on: ubuntu-latest
     needs: release
-    permissions: { packages: write }
+    permissions: { packages: write, id-token: write, contents: read }
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
+      - name: Build, attest and push images
+        run: |
+          set -euo pipefail
           OWNER="${{ github.repository_owner }}"
           TAG="${GITHUB_REF_NAME#v}"
-          docker build -t "ghcr.io/$OWNER/synapseone-gateway:$TAG" -t "ghcr.io/$OWNER/synapseone-gateway:latest" apps/gateway
-          docker build -t "ghcr.io/$OWNER/synapseone-iam:$TAG" -t "ghcr.io/$OWNER/synapseone-iam:latest" apps/iam-service
-          docker build -t "ghcr.io/$OWNER/synapseone-workflow:$TAG" -t "ghcr.io/$OWNER/synapseone-workflow:latest" apps/workflow-service
-          docker build -t "ghcr.io/$OWNER/synapseone-console:$TAG" -t "ghcr.io/$OWNER/synapseone-console:latest" apps/console
-          docker push "ghcr.io/$OWNER/synapseone-gateway:$TAG" && docker push "ghcr.io/$OWNER/synapseone-gateway:latest"
-          docker push "ghcr.io/$OWNER/synapseone-iam:$TAG" && docker push "ghcr.io/$OWNER/synapseone-iam:latest"
-          docker push "ghcr.io/$OWNER/synapseone-workflow:$TAG" && docker push "ghcr.io/$OWNER/synapseone-workflow:latest"
-          docker push "ghcr.io/$OWNER/synapseone-console:$TAG" && docker push "ghcr.io/$OWNER/synapseone-console:latest"
+          for pair in "gateway:apps/gateway" "iam:apps/iam-service" "workflow:apps/workflow-service" "console:apps/console"; do
+            name="${pair%%:*}"
+            context="${pair##*:}"
+            docker buildx build --push --provenance=true --sbom=true \
+              -t "ghcr.io/$OWNER/synapseone-$name:$TAG" \
+              -t "ghcr.io/$OWNER/synapseone-$name:latest" \
+              "$context"
+          done
+      - name: Sign images with cosign (keyless)
+        run: |
+          set -euo pipefail
+          OWNER="${{ github.repository_owner }}"
+          TAG="${GITHUB_REF_NAME#v}"
+          for name in gateway iam workflow console; do
+            cosign sign --yes "ghcr.io/$OWNER/synapseone-$name:$TAG"
+          done

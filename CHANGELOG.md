@@ -6,6 +6,8 @@ Format based on Keep a Changelog; versioning follows SemVer.
 ## [Unreleased]
 
 ### Added
+- Release images now use Buildx provenance/SBOM attestations and keyless
+  cosign signing (#49).
 - Security/quality workflows with CodeQL (TypeScript + Python), dependency
   review, actionlint, Dependabot and PR template.
 - Tier-1 roadmap issues for durable human tasks, SCIM, search, secrets, audit
