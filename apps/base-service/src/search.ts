@@ -131,7 +131,7 @@ export async function replaceCollectionIndex(collection: StoredCollection, docum
       await pgQuery(
         `INSERT INTO synapseone_search_index
            (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,to_timestamp($12),now())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now())
          ON CONFLICT (id) DO UPDATE SET
            collection_name = EXCLUDED.collection_name, org_id = EXCLUDED.org_id, account_id = EXCLUDED.account_id,
            title = EXCLUDED.title, body = EXCLUDED.body, acl = EXCLUDED.acl,
@@ -166,7 +166,7 @@ export async function upsertDocumentIndex(collection: StoredCollection, document
     await pgQuery(
       `INSERT INTO synapseone_search_index
          (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,to_timestamp($12),now())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now())
        ON CONFLICT (id) DO UPDATE SET
          collection_name = EXCLUDED.collection_name, org_id = EXCLUDED.org_id, account_id = EXCLUDED.account_id,
          title = EXCLUDED.title, body = EXCLUDED.body, acl = EXCLUDED.acl,
