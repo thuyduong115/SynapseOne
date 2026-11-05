@@ -535,7 +535,9 @@ services:
       - "${CONSOLE_HOST_PORT:-3000}:80"
     depends_on:
       - gateway
-    networks: [synapseone-net]
+    networks:
+      synapseone-net:
+        aliases: [synapseone-console]
 
   # ---- Monitoring (Prometheus, optional but on by default) ----
   # Tat khi khong can: docker compose stop prometheus postgres-exporter redis-exporter
