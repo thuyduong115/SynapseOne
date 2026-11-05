@@ -173,6 +173,11 @@ services:
       AUDIT_INGEST_URL: ${AUDIT_INGEST_URL:-}
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:-${SYNAPSEDX_INTERNAL_SECRET:-}}
       SYNAPSEONE_IAM_API_KEY: ${SYNAPSEONE_IAM_API_KEY:-${SYNAPSEDX_IAM_API_KEY:-}}
+      # 32-byte hex key for the encrypted secret/credential vault. Operators must
+      # set this in production; an empty value falls back to an ephemeral dev key.
+      SYNAPSEONE_CREDENTIAL_KEY: ${SYNAPSEONE_CREDENTIAL_KEY:-}
+      # Optional shared token for /v1/secrets/rotation-webhook.
+      SECRET_ROTATION_WEBHOOK_SECRET: ${SECRET_ROTATION_WEBHOOK_SECRET:-}
       HSTS_ENABLED: ${HSTS_ENABLED:-false}
       WORKFLOW_CRON_TICK_MS: ${WORKFLOW_CRON_TICK_MS:-15000}
       WORKFLOW_TIMEOUT_MS: ${WORKFLOW_TIMEOUT_MS:-60000}

@@ -57,6 +57,10 @@ routes:
     target: ${WORKFLOW_SERVICE_URL:http://workflow:4002}
     auth: either
 
+  - path: /v1/human-tasks
+    target: ${WORKFLOW_SERVICE_URL:http://workflow:4002}
+    auth: either
+
   - path: /v1/executions
     target: ${WORKFLOW_SERVICE_URL:http://workflow:4002}
     auth: either

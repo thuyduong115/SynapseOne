@@ -11,7 +11,7 @@ import './env-compat';
 import path from 'path';
 import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { isWebhookType, isCronType, normalizeNodeType } from './engine';
@@ -823,7 +823,7 @@ export async function transitionHumanTaskRec(
       ...(patch.escalated_at !== undefined ? { escalatedAt: patch.escalated_at ? new Date(patch.escalated_at) : null } : {}),
       ...(patch.execution_id !== undefined ? { executionId: patch.execution_id } : {}),
       updatedAt: new Date(updated_at),
-    }).where(and(eq(humanTasks.id, id), sql`${humanTasks.status} = any(${expected})`)).returning();
+    }).where(and(eq(humanTasks.id, id), inArray(humanTasks.status, expected))).returning();
     return rows[0] ? rowToHumanTask(rows[0]) : null;
   }
   const cur = memHumanTasks.get(id);
