@@ -5,6 +5,26 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Added — MFA, sign-in lockout, production object storage and backups
+- **TOTP multi-factor authentication** (RFC 6238, no new dependencies): enrol with
+  `POST /v1/auth/mfa/totp/setup` + `/enable` (10 single-use recovery codes),
+  `GET /v1/auth/mfa`, `/recovery-codes`, `/disable`. Password and dev logins of an
+  enrolled user return `401 mfa_required` with a 5-minute `mfaToken` and finish at
+  `POST /v1/auth/mfa/verify`. Secrets are sealed with AES-256-GCM
+  (`IAM_MFA_ENCRYPTION_KEY`), each TOTP step is accepted once, and the challenge
+  token can never be used as an access token. IAM migration `0006_mfa_lockout`.
+- **Sign-in lockout**: `IAM_LOGIN_MAX_FAILURES` (5) wrong passwords or MFA codes lock
+  the user for `IAM_LOGIN_LOCKOUT_SECONDS` (900) → `429 account_locked` + `Retry-After`.
+  Org admins: `DELETE /v1/users/:id/mfa` (lost device) and `POST /v1/users/:id/unlock`.
+- Clients: JS/Python/Go SDK MFA methods, CLI `login --password/--code/--recovery-code`
+  and `mfa …`, Console *Security* page, MFA step on sign-in and admin actions on *Users*.
+- **Production object storage**: `docker-compose.prod.yml` runs SeaweedFS 4.48
+  (Apache-2.0) instead of S3Mock on the same `s3:9090` endpoint;
+  `tools/storage/migrate-s3mock.sh` copies existing objects (key + Content-Type).
+- **Postgres backups**: `pg-backup` service in the prod overlay (daily pg_dump of the
+  platform and Authentik databases, checksums, retention) and
+  `tools/backup/pg-restore.sh`.
+
 ### Added
 - Durable human tasks / wait-for-signal (`/v1/human-tasks`, `humanTask` node)
   with claim, complete/reject/expire, SLA deadlines and exactly-once resume.

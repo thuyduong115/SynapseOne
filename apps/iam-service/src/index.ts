@@ -37,6 +37,11 @@ import {
   verifyApiKey, verifyAccess, listApiKeys, findApiKeyById, signDelegated,
   listRefreshSessions, revokeRefreshById, revokeApiKeysForUser, rotateApiKey,
 } from './tokens';
+import {
+  beginTotpEnrolment, checkSecondFactor, clearLoginFailures, enableTotp, getMfa, lockRemaining, mfaEnabled,
+  otpauthUrl, recordLoginFailure, regenerateRecoveryCodes, removeMfa, signMfaChallenge, verifyMfaChallenge,
+  TOTP_DIGITS, TOTP_PERIOD,
+} from './mfa';
 import { decideForPrincipal, managedPolicyList, MANAGED_POLICIES, type PrincipalInput } from './authz';
 import { secretsEqual, hashCandidates } from './db';
 import { ingestUsageEvents, listUsageEvents, purgeUsage, usageSummary, type UsageFilter } from './usage';
@@ -290,6 +295,73 @@ async function issueSession(user: { id: string; email: string; org_id: string })
   const rt = newRefreshToken();
   await storeRefresh(user.id, rt.hash, refreshExpiry());
   return { accessToken: token, expiresIn, refreshToken: rt.value, user };
+}
+
+function sendLocked(res: express.Response, seconds: number) {
+  res.setHeader('Retry-After', String(seconds));
+  return res.status(429).json({
+    error: 'account_locked',
+    message: 'Too many failed sign-in attempts. Try again later or ask an administrator to unlock the account.',
+    retryAfter: seconds,
+  });
+}
+
+function sendMfaChallenge(res: express.Response, userId: string, method: string) {
+  noStore(res);
+  return res.status(401).json({
+    error: 'mfa_required',
+    message: 'Enter the code from your authenticator app',
+    ...signMfaChallenge(userId, method),
+    methods: ['totp', 'recovery'],
+  });
+}
+
+/** Self-service MFA calls need a real user session (not a key or delegated token). */
+async function requireUserCaller(req: express.Request, res: express.Response): Promise<User | null> {
+  const h = firstHeader(req.headers.authorization as any);
+  if (!h.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'unauthorized', message: 'Bearer token required' });
+    return null;
+  }
+  let claims: any;
+  try {
+    claims = verifyAccess(h.slice(7));
+  } catch {
+    res.status(401).json({ error: 'invalid_token' });
+    return null;
+  }
+  if (claims.kind && claims.kind !== 'user') {
+    res.status(403).json({ error: 'mfa_requires_user', message: 'Only a signed-in user can manage their own MFA' });
+    return null;
+  }
+  const user = await getUserById(claims.sub);
+  if (!user) {
+    res.status(404).json({ error: 'user_not_found' });
+    return null;
+  }
+  return user;
+}
+
+/** Resolve the security subject of an org-admin action on another user. */
+async function orgAdminTarget(req: express.Request, res: express.Response, trustStamped: boolean): Promise<User | null> {
+  if (!isUuid(req.params.userId)) {
+    res.status(400).json({ error: 'invalid_id', message: 'userId must be a UUID' });
+    return null;
+  }
+  const user = await getUserById(req.params.userId);
+  if (!user) {
+    res.status(404).json({ error: 'user_not_found' });
+    return null;
+  }
+  if (!(await canActForOrg(req, trustStamped, user.org_id))) {
+    res.status(403).json({ error: 'forbidden', message: 'user belongs to another tenant' });
+    return null;
+  }
+  if (!(await callerIsOrgAdmin(req, trustStamped, user.org_id))) {
+    res.status(403).json({ error: 'org_admin_required', message: 'only an organization administrator can do this' });
+    return null;
+  }
+  return user;
 }
 
 /** Resolve a service identity from a Bearer service-account token or API key.
@@ -1154,18 +1226,27 @@ async function auditMutation(req: express.Request, action: string, resource: str
     if (password !== undefined) {
       const org = await getOrgBySlug(slug);
       const user = org ? await findUserByOrgEmail(org.id, email) : null;
+      if (user) {
+        const left = await lockRemaining(user.id);
+        if (left > 0) return sendLocked(res, left);
+      }
       // Constant-ish work for unknown users; never reveal whether the account exists.
       const ok = user ? await verifyPassword(password, user.password_hash) : false;
       if (user && user.active === false) {
         return res.status(403).json({ error: 'account_deactivated', message: 'This account has been deactivated by an administrator.' });
       }
       if (!user || !ok) {
+        const lockedFor = user ? await recordLoginFailure(user.id) : 0;
         await logAudit({
           actor_type: 'user', actor_id: user?.id || '', action: 'iam:auth:login', resource: `org:${org?.id || slug}`,
-          decision: false, context: { method: 'password', email, ...(org ? { org: org.id } : {}) },
+          decision: false, context: { method: 'password', email, ...(org ? { org: org.id } : {}), ...(lockedFor ? { lockedForSeconds: lockedFor } : {}) },
         }).catch(() => undefined);
         return res.status(401).json({ error: 'invalid_credentials', message: 'Email or password is incorrect' });
       }
+      // Second factor: the password alone never yields a session. Failures
+      // keep counting until the whole login succeeds.
+      if (await mfaEnabled(user.id)) return sendMfaChallenge(res, user.id, 'pwd');
+      await clearLoginFailures(user.id);
       const session = await issueSession(user);
       await logAudit({
         actor_type: 'user', actor_id: user.id, action: 'iam:auth:login', resource: `org:${user.org_id}`,
@@ -1186,9 +1267,136 @@ async function auditMutation(req: express.Request, action: string, resource: str
     if (user.active === false) {
       return res.status(403).json({ error: 'account_deactivated', message: 'This account has been deactivated by an administrator.' });
     }
+    if (await mfaEnabled(user.id)) {
+      const left = await lockRemaining(user.id);
+      if (left > 0) return sendLocked(res, left);
+      return sendMfaChallenge(res, user.id, 'dev');
+    }
     const session = await issueSession(user);
     noStore(res);
     res.json(session);
+  });
+
+  // ---------- Multi-factor authentication (TOTP) ----------
+  // Step 2 of a login that returned 401 mfa_required.
+  app.post('/v1/auth/mfa/verify', async (req, res) => {
+    const parsed = z.object({
+      mfaToken: z.string().min(1).max(4096),
+      code: z.string().trim().max(16).nullish(),
+      recoveryCode: z.string().trim().max(32).nullish(),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: parsed.error.message });
+    const { mfaToken, code, recoveryCode } = parsed.data;
+    if (!code && !recoveryCode) return res.status(400).json({ error: 'invalid_body', message: 'code or recoveryCode required' });
+    const challenge = verifyMfaChallenge(mfaToken);
+    if (!challenge) return res.status(401).json({ error: 'invalid_mfa_token', message: 'The sign-in challenge expired. Sign in again.' });
+    const user = await getUserById(challenge.sub);
+    if (!user) return res.status(401).json({ error: 'invalid_mfa_token' });
+    if (user.active === false) {
+      return res.status(403).json({ error: 'account_deactivated', message: 'This account has been deactivated by an administrator.' });
+    }
+    const left = await lockRemaining(user.id);
+    if (left > 0) return sendLocked(res, left);
+    const result = await checkSecondFactor(user.id, { code, recoveryCode });
+    if (!result.ok) {
+      const lockedFor = await recordLoginFailure(user.id);
+      await logAudit({
+        actor_type: 'user', actor_id: user.id, action: 'iam:auth:mfa', resource: `user:${user.id}`,
+        decision: false, context: { org: user.org_id, method: recoveryCode ? 'recovery' : 'totp', ...(lockedFor ? { lockedForSeconds: lockedFor } : {}) },
+      }).catch(() => undefined);
+      return res.status(401).json({ error: 'invalid_mfa_code', message: 'The verification code is incorrect' });
+    }
+    await clearLoginFailures(user.id);
+    const session = await issueSession(user);
+    await logAudit({
+      actor_type: 'user', actor_id: user.id, action: 'iam:auth:login', resource: `org:${user.org_id}`,
+      decision: true, context: { method: challenge.amr[0] || 'pwd', mfa: result.method, org: user.org_id, recoveryCodesRemaining: result.remainingRecovery },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({ ...session, mfa: { method: result.method, recoveryCodesRemaining: result.remainingRecovery } });
+  });
+
+  app.get('/v1/auth/mfa', async (req, res) => {
+    const caller = await requireUserCaller(req, res);
+    if (!caller) return;
+    const rec = await getMfa(caller.id);
+    noStore(res);
+    res.json({
+      enabled: !!rec?.enabled,
+      pending: !!rec && !rec.enabled,
+      methods: rec?.enabled ? ['totp', 'recovery'] : [],
+      recoveryCodesRemaining: rec?.enabled ? rec.recovery_hashes.length : 0,
+      enabledAt: rec?.enabled_at ?? null,
+    });
+  });
+
+  app.post('/v1/auth/mfa/totp/setup', async (req, res) => {
+    const caller = await requireUserCaller(req, res);
+    if (!caller) return;
+    const started = await beginTotpEnrolment(caller.id);
+    if (!started) return res.status(409).json({ error: 'mfa_already_enabled', message: 'Disable the current authenticator before enrolling a new one' });
+    noStore(res);
+    res.json({ secret: started.secret, otpauthUrl: otpauthUrl(started.secret, caller.email), period: TOTP_PERIOD, digits: TOTP_DIGITS, algorithm: 'SHA1' });
+  });
+
+  app.post('/v1/auth/mfa/totp/enable', async (req, res) => {
+    const caller = await requireUserCaller(req, res);
+    if (!caller) return;
+    const parsed = z.object({ code: z.string().trim().max(16) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: 'code required' });
+    const rec = await getMfa(caller.id);
+    if (!rec) return res.status(409).json({ error: 'mfa_not_started', message: 'Call /v1/auth/mfa/totp/setup first' });
+    if (rec.enabled) return res.status(409).json({ error: 'mfa_already_enabled' });
+    const check = await checkSecondFactor(caller.id, { code: parsed.data.code }, false);
+    if (!check.ok) return res.status(400).json({ error: 'invalid_mfa_code', message: 'The verification code is incorrect' });
+    const recoveryCodes = await enableTotp(caller.id);
+    await logAudit({
+      actor_type: 'user', actor_id: caller.id, action: 'iam:mfa:enable', resource: `user:${caller.id}`,
+      decision: true, context: { org: caller.org_id, method: 'totp' },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({ enabled: true, recoveryCodes });
+  });
+
+  app.post('/v1/auth/mfa/recovery-codes', async (req, res) => {
+    const caller = await requireUserCaller(req, res);
+    if (!caller) return;
+    const parsed = z.object({ code: z.string().trim().max(16) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid_body', message: 'code required' });
+    if (!(await mfaEnabled(caller.id))) return res.status(409).json({ error: 'mfa_not_enabled' });
+    const check = await checkSecondFactor(caller.id, { code: parsed.data.code });
+    if (!check.ok) return res.status(401).json({ error: 'invalid_mfa_code', message: 'The verification code is incorrect' });
+    const recoveryCodes = await regenerateRecoveryCodes(caller.id);
+    await logAudit({
+      actor_type: 'user', actor_id: caller.id, action: 'iam:mfa:recovery-codes', resource: `user:${caller.id}`,
+      decision: true, context: { org: caller.org_id },
+    }).catch(() => undefined);
+    noStore(res);
+    res.json({ recoveryCodes });
+  });
+
+  app.post('/v1/auth/mfa/disable', async (req, res) => {
+    const caller = await requireUserCaller(req, res);
+    if (!caller) return;
+    const parsed = z.object({
+      code: z.string().trim().max(16).nullish(),
+      recoveryCode: z.string().trim().max(32).nullish(),
+    }).safeParse(req.body);
+    if (!parsed.success || (!parsed.data.code && !parsed.data.recoveryCode)) {
+      return res.status(400).json({ error: 'invalid_body', message: 'code or recoveryCode required' });
+    }
+    if (!(await mfaEnabled(caller.id))) {
+      await removeMfa(caller.id); // drop an unfinished enrolment
+      return res.json({ enabled: false });
+    }
+    const check = await checkSecondFactor(caller.id, parsed.data);
+    if (!check.ok) return res.status(401).json({ error: 'invalid_mfa_code', message: 'The verification code is incorrect' });
+    await removeMfa(caller.id);
+    await logAudit({
+      actor_type: 'user', actor_id: caller.id, action: 'iam:mfa:disable', resource: `user:${caller.id}`,
+      decision: true, context: { org: caller.org_id },
+    }).catch(() => undefined);
+    res.json({ enabled: false });
   });
 
   // ---------- First-party credential lifecycle (#22) ----------
@@ -2255,6 +2463,25 @@ async function auditMutation(req: express.Request, action: string, resource: str
       if (admins.length <= 1) return res.status(409).json({ error: 'last_admin', message: 'an organization needs at least one administrator' });
     }
     res.json(await setOrgAdmin(user.id, flag));
+  });
+
+  // Lost authenticator: an org administrator removes the user's second
+  // factor (the user enrols again) and clears any login lockout.
+  app.delete('/v1/users/:userId/mfa', async (req, res) => {
+    const user = await orgAdminTarget(req, res, TRUST_STAMPED);
+    if (!user) return;
+    const removed = await removeMfa(user.id);
+    await clearLoginFailures(user.id);
+    await auditMutation(req, 'iam:mfa:reset', `user:${user.id}`, { org: user.org_id, removed });
+    res.json({ ok: true, removed });
+  });
+
+  app.post('/v1/users/:userId/unlock', async (req, res) => {
+    const user = await orgAdminTarget(req, res, TRUST_STAMPED);
+    if (!user) return;
+    await clearLoginFailures(user.id);
+    await auditMutation(req, 'iam:user:unlock', `user:${user.id}`, { org: user.org_id });
+    res.json({ ok: true });
   });
 
   // Liệt kê policy của user (hữu ích khi debug authorize).

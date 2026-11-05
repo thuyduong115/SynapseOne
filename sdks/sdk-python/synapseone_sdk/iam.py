@@ -98,6 +98,56 @@ class IamService:
         """Revoke one session by id."""
         return self._req("DELETE", f"/v1/auth/sessions/{quote(session_id, safe='')}")
 
+    # ---- multi-factor authentication (TOTP) ----
+    def verify_mfa(
+        self,
+        mfa_token: str,
+        code: str | None = None,
+        recovery_code: str | None = None,
+    ) -> dict:
+        """Finish a login that failed with 401 ``mfa_required``."""
+        body: dict = {"mfaToken": mfa_token}
+        if code:
+            body["code"] = code
+        if recovery_code:
+            body["recoveryCode"] = recovery_code
+        return self._req("POST", "/v1/auth/mfa/verify", body)
+
+    def mfa_status(self) -> dict:
+        """Current user's MFA status."""
+        return self._req("GET", "/v1/auth/mfa")
+
+    def setup_totp(self) -> dict:
+        """Start TOTP enrolment: returns ``secret`` and ``otpauthUrl``."""
+        return self._req("POST", "/v1/auth/mfa/totp/setup", {})
+
+    def enable_totp(self, code: str) -> dict:
+        """Confirm enrolment; returns recovery codes (shown once)."""
+        return self._req("POST", "/v1/auth/mfa/totp/enable", {"code": code})
+
+    def regenerate_recovery_codes(self, code: str) -> dict:
+        """Replace the recovery codes (needs a TOTP code)."""
+        return self._req("POST", "/v1/auth/mfa/recovery-codes", {"code": code})
+
+    def disable_mfa(
+        self, code: str | None = None, recovery_code: str | None = None
+    ) -> dict:
+        """Turn MFA off with a TOTP or recovery code."""
+        body: dict = {}
+        if code:
+            body["code"] = code
+        if recovery_code:
+            body["recoveryCode"] = recovery_code
+        return self._req("POST", "/v1/auth/mfa/disable", body)
+
+    def reset_user_mfa(self, user_id: str) -> dict:
+        """Org admins: remove a user's second factor after a lost device."""
+        return self._req("DELETE", f"/v1/users/{quote(user_id, safe='')}/mfa")
+
+    def unlock_user(self, user_id: str) -> dict:
+        """Org admins: clear a sign-in lockout."""
+        return self._req("POST", f"/v1/users/{quote(user_id, safe='')}/unlock", {})
+
     def exchange_token(
         self,
         user_id: str,

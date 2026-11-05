@@ -43,6 +43,9 @@ reads which key (audited from source):
 | `IAM_JWT_SECRET` | — | HS256 for access/service JWTs (≥32 random chars); boot fails in `NODE_ENV=production` when weak/default |
 | `IAM_JWT_EXPIRES_IN` / `IAM_REFRESH_EXPIRES_IN` | 3600 / 2592000 (seconds) | token TTLs (clamped 60–86400 / 3600–315360000; garbage env falls back to default) |
 | `IAM_API_KEY_PEPPER` | — (plain SHA-256) | HMAC pepper for API-key/refresh-token hashes at rest; keys created before the pepper still verify (legacy fallback) |
+| `IAM_MFA_ENCRYPTION_KEY` | — (HKDF of `IAM_JWT_SECRET`) | 32-byte key (hex/base64) sealing TOTP secrets with AES-256-GCM. Set it explicitly in production; changing it invalidates enrolled authenticators |
+| `IAM_MFA_ISSUER` | `SynapseOne` | issuer label in the `otpauth://` URL shown by authenticator apps |
+| `IAM_LOGIN_MAX_FAILURES` / `IAM_LOGIN_LOCKOUT_SECONDS` | `5` / `900` | consecutive wrong passwords or MFA codes before a temporary lock (`429 account_locked` + `Retry-After`); org admins can `POST /v1/users/:id/unlock` |
 | `AUDIT_RETENTION_DAYS` | `0` (disabled) | hourly purge of `audit_log` rows older than N days (batched, clamped 1–3650); prod e.g. `180` |
 | `AUDIT_TRAIL` | `true` | data-plane services (Base/Faststore/Queue/Stream/Workflow/LDS) emit one mutation audit event per write to IAM (`POST /v1/audit/ingest`). Set `false` only in local dev |
 | `AUDIT_INGEST_URL` | `${IAM_SERVICE_URL}/v1/audit/ingest` | override the data-plane audit sink (tests/staging) |

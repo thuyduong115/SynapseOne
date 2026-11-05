@@ -71,6 +71,36 @@ tenant. Platform calls without a tenant fail with `400 tenant_required`.
   caller-supplied email — dev only; set `IAM_ALLOW_OIDC_DEMO_CALLBACK=false` in
   production, which then requires a real IdP `code`)
 
+### Multi-factor authentication (TOTP) and lockout
+
+When a user has MFA enabled, `POST /v1/auth/login` (password or dev login) never
+returns a session. It answers `401 {error: "mfa_required", mfaToken, expiresIn: 300,
+methods: ["totp","recovery"]}` and the client finishes with:
+
+- `POST /v1/auth/mfa/verify {mfaToken, code}` or `{mfaToken, recoveryCode}` → token set
+  plus `mfa: {method, recoveryCodesRemaining}`. A TOTP code is accepted once (replay
+  protection); each recovery code is single-use. `mfaToken` is not an access token.
+
+Self-service (user Bearer; API keys, service accounts and delegated tokens get `403`):
+
+- `GET /v1/auth/mfa` → `{enabled, pending, methods, recoveryCodesRemaining, enabledAt}`
+- `POST /v1/auth/mfa/totp/setup` → `{secret, otpauthUrl, period: 30, digits: 6, algorithm: "SHA1"}`
+  (`409 mfa_already_enabled` while a factor is active)
+- `POST /v1/auth/mfa/totp/enable {code}` → `{enabled: true, recoveryCodes: [10 codes, shown once]}`
+- `POST /v1/auth/mfa/recovery-codes {code}` → `{recoveryCodes}` (old codes stop working)
+- `POST /v1/auth/mfa/disable {code | recoveryCode}` → `{enabled: false}`
+
+Administration (org admins of the same org; `403 org_admin_required` otherwise):
+
+- `DELETE /v1/users/:userId/mfa` → `{ok, removed}` — lost device: removes the factor and clears the lockout
+- `POST /v1/users/:userId/unlock` → `{ok}` — clears a sign-in lockout
+
+Lockout: `IAM_LOGIN_MAX_FAILURES` (default 5) consecutive wrong passwords or second-factor
+codes lock the user for `IAM_LOGIN_LOCKOUT_SECONDS` (default 900): `429 account_locked`
+with `Retry-After`. Unknown emails are never locked or reported. TOTP secrets are sealed
+with AES-256-GCM using `IAM_MFA_ENCRYPTION_KEY` (32 bytes, hex/base64; derived from
+`IAM_JWT_SECRET` when unset). OIDC sign-ins rely on the identity provider's own MFA.
+
 ## Orgs / Accounts
 
 - `GET /v1/orgs` → `[{id, slug, display_name}]`

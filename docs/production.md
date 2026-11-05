@@ -48,10 +48,17 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
 
 ## 3. Data
 
-- [ ] Postgres: durable volume + periodic backups (`pg_dump`, see `docs/troubleshooting.md`).
-- [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials and
-      replace S3Mock with MinIO/real S3 (`docs/object-storage.md`). Set
+- [ ] Postgres backups: the prod overlay runs `pg-backup` (pg_dump custom format of
+      `synapseone` and `authentik`, daily, kept `BACKUP_RETENTION_DAYS`=7, each dump
+      with a `.sha256`) into the `pgbackups` volume. Run one now with
+      `docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm pg-backup --once`,
+      copy the volume off the host, and rehearse `tools/backup/pg-restore.sh <file.dump>`.
+- [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials. The prod
+      overlay replaces S3Mock with SeaweedFS; migrate old objects with
+      `tools/storage/migrate-s3mock.sh` (`docs/object-storage.md`). Set
       `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.
+- [ ] IAM: set `IAM_MFA_ENCRYPTION_KEY` (`openssl rand -hex 32`) before users enrol MFA;
+      keep `IAM_LOGIN_MAX_FAILURES`/`IAM_LOGIN_LOCKOUT_SECONDS` at their defaults or stricter.
 - [ ] Notifications: set `DATABASE_URL`, `NOTIFICATIONS_QUEUE_URL`,
       `NOTIFICATIONS_EMAIL_RELAY_URL`/`_SMS_`/`_PUSH_` as needed; the service
       refuses to boot without the DB, internal secret and CORS origin

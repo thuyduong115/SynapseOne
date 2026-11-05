@@ -86,14 +86,29 @@ tenant/bucket/key/method; hand it only to the intended client. The legacy
 | --- | --- | --- |
 | `STORAGE_BACKEND` | `fs` | `s3` (required by the boot guard) |
 | `STORAGE_FS_ROOT` | `/data` (volume) | — |
-| `STORAGE_S3_ENDPOINT` | `http://s3:9090` | MinIO or AWS S3 HTTPS endpoint |
+| `STORAGE_S3_ENDPOINT` | `http://s3:9090` | `http://s3:9090` (SeaweedFS in the prod overlay) or an AWS S3 HTTPS endpoint |
 | `STORAGE_S3_BUCKET` | `synapseone-core` | dedicated bucket |
 | `STORAGE_S3_ACCESS_KEY` / `_SECRET_KEY` | `test`/`test` | scoped credentials |
 | `STORAGE_S3_REGION` | `us-east-1` | backend region |
 | `STORAGE_S3_PATH_STYLE` | `true` | `false` for AWS virtual-host style |
 
-Compose ships S3Mock for local development. For a MinIO-like local stack, point
-`STORAGE_S3_ENDPOINT` at MinIO and keep `STORAGE_S3_PATH_STYLE=true`. The bucket
+Compose ships S3Mock for local development only. `docker-compose.prod.yml` swaps
+the `s3` service for **SeaweedFS** (`chrislusf/seaweedfs:4.48`, Apache-2.0): same
+service name and port, so OCS keeps `STORAGE_S3_ENDPOINT=http://s3:9090` with
+`STORAGE_S3_PATH_STYLE=true`. SeaweedFS uses `STORAGE_S3_ACCESS_KEY` /
+`STORAGE_S3_SECRET_KEY` as its only identity (use letters and digits), stores data
+in the `seaweeddata` volume and is reachable only on the internal network.
+
+Moving an existing deployment off S3Mock:
+
+1. Deploy the prod overlay (the new `s3` service starts empty; `s3-init` creates the bucket).
+2. Run `tools/storage/migrate-s3mock.sh` from the repository root. It mounts the old
+   `s3data` volume in a temporary S3Mock and copies every object with its key and
+   Content-Type through the OCS S3 client. Re-running skips objects already copied.
+3. Check a few files through `/v1/ocs`, then delete the old `s3data` volume.
+
+Back up the `seaweeddata` volume (or replicate to another S3 target) alongside the
+Postgres dumps described in `docs/production.md`. The bucket
 policy should allow only SynapseOCS credentials to read/write the backend;
 clients should use the OCS API/presigned URLs, not the backend directly.
 

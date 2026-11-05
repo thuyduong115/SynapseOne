@@ -113,7 +113,10 @@ function httpError(status, p, data) {
   if (status === 404) {
     return new Error(`HTTP 404 ${p}: not found${msg ? ` — ${msg}` : raw && raw !== 'null' ? ` — ${raw}` : ''}`);
   }
-  return new Error(`HTTP ${status} ${p}: ${raw}`);
+  const err = new Error(`HTTP ${status} ${p}: ${raw}`);
+  err.status = status;
+  err.data = data;
+  return err;
 }
 const GET = (p, o) => req('GET', p, undefined, o);
 const POST = (p, b, o) => req('POST', p, b, o);
@@ -304,7 +307,20 @@ async function cmdLogin(o) {
   const email = o.email || o._[0];
   need(email, 'email');
   const org = o.org || o._[1] || 'acme';
-  const r = await POST('/v1/auth/login', { email, orgSlug: org }, o);
+  const body = { email, orgSlug: org };
+  if (o.password) body.password = String(o.password);
+  let r;
+  try {
+    r = await POST('/v1/auth/login', body, o);
+  } catch (e) {
+    if (e.status !== 401 || e.data?.error !== 'mfa_required') throw e;
+    const code = o.code ? String(o.code) : '';
+    const recoveryCode = o['recovery-code'] ? String(o['recovery-code']) : '';
+    if (!code && !recoveryCode) {
+      throw new Error('this account uses MFA: run login again with --code <6 digits> or --recovery-code <code>');
+    }
+    r = await POST('/v1/auth/mfa/verify', { mfaToken: e.data.mfaToken, ...(code ? { code } : { recoveryCode }) }, o);
+  }
   const cfg = loadConfig();
   cfg.baseUrl = baseUrl(o);
   cfg.token = r.accessToken;
@@ -555,6 +571,42 @@ async function cmdSessions(o) {
   }
   if (sub && sub !== 'list') throw new Error('usage: sessions [list] | sessions revoke <session-id>');
   return out(await GET('/v1/auth/sessions', o), o, ['id', 'created_at', 'expires_at']);
+}
+async function cmdMfa(o) {
+  const [sub, arg] = o._;
+  const code = o.code ? String(o.code) : undefined;
+  const recoveryCode = o['recovery-code'] ? String(o['recovery-code']) : undefined;
+  if (!sub || sub === 'status') return out(await GET('/v1/auth/mfa', o), o);
+  if (sub === 'setup') {
+    const r = await POST('/v1/auth/mfa/totp/setup', {}, o);
+    if (o.json) return out(r, o);
+    console.log(`Add this account to your authenticator app, then run: mfa enable <code>\n  secret: ${r.secret}\n  url:    ${r.otpauthUrl}`);
+    return;
+  }
+  if (sub === 'enable') {
+    need(arg || code, 'code');
+    const r = await POST('/v1/auth/mfa/totp/enable', { code: arg || code }, o);
+    if (o.json) return out(r, o);
+    console.log(`MFA enabled. Store these recovery codes safely (shown once):\n  ${r.recoveryCodes.join('\n  ')}`);
+    return;
+  }
+  if (sub === 'recovery-codes') {
+    need(arg || code, 'code');
+    return out(await POST('/v1/auth/mfa/recovery-codes', { code: arg || code }, o), o);
+  }
+  if (sub === 'disable') {
+    if (!code && !recoveryCode) throw new Error('usage: mfa disable --code <6 digits> | --recovery-code <code>');
+    return out(await POST('/v1/auth/mfa/disable', code ? { code } : { recoveryCode }, o), o);
+  }
+  if (sub === 'reset') {
+    need(arg, 'user-id');
+    return out(await DEL(`/v1/users/${encodeURIComponent(arg)}/mfa`, o), o);
+  }
+  if (sub === 'unlock') {
+    need(arg, 'user-id');
+    return out(await POST(`/v1/users/${encodeURIComponent(arg)}/unlock`, {}, o), o);
+  }
+  throw new Error('usage: mfa [status] | mfa setup | mfa enable <code> | mfa recovery-codes <code> | mfa disable --code C | mfa reset <user-id> | mfa unlock <user-id>');
 }
 async function cmdOrgAdmin(o) {
   const [userId, flag] = o._;
@@ -997,7 +1049,8 @@ async function baseQuery(o, args) {
 }
 
 const COMMANDS = {
-  login: { fn: cmdLogin, use: 'login --email E [--org ORG] [--base URL]', doc: 'Dev login, save token + refresh' },
+  login: { fn: cmdLogin, use: 'login --email E [--org ORG] [--password P] [--code 123456 | --recovery-code C] [--base URL]', doc: 'Sign in (password or dev login, with MFA code when enabled), save token + refresh' },
+  mfa: { fn: cmdMfa, use: 'mfa [status] | mfa setup | mfa enable <code> | mfa recovery-codes <code> | mfa disable --code C | mfa reset <user-id> | mfa unlock <user-id>', doc: 'Multi-factor authentication (TOTP) and sign-in lockout' },
   refresh: { fn: cmdRefresh, use: 'refresh [refresh-token]', doc: 'Rotate access token (atomic server-side)' },
   'logout-all': { fn: cmdLogoutAll, use: 'logout-all [refresh-token]', doc: 'Revoke ALL sessions of token owner' },
   verify: { fn: cmdVerify, use: 'verify', doc: 'Check current Bearer / API key' },
