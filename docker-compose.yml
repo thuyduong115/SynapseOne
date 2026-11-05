@@ -466,7 +466,7 @@ services:
 
   # Daily incremental snapshots of the object store (SynapseOCS files): content
   # stored once per SHA-256, Content-Type kept, BACKUP_RETENTION_DAYS. Runs in
-  # the OCS image. Restore: docker compose run --rm s3-backup restore latest
+  # the OCS image. Restore: docker compose run --rm --no-deps s3-backup restore latest
   s3-backup:
     build:
       context: ./apps/ocs-service

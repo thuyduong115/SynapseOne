@@ -116,11 +116,14 @@ into the `s3backups` volume with `tools/backup/s3-backup.mjs`, run in the OCS im
 
 ```bash
 C="docker compose -f docker-compose.yml"
-$C run --rm s3-backup once                        # snapshot now
-$C run --rm s3-backup list                        # snapshots with object counts
-$C run --rm s3-backup restore latest --dry-run    # what would change
-$C run --rm s3-backup restore 20261106T020000Z --prefix tenants/org_x/
+$C run --rm --no-deps s3-backup once                        # snapshot now
+$C run --rm --no-deps s3-backup list                        # snapshots with object counts
+$C run --rm --no-deps s3-backup restore latest --dry-run    # what would change
+$C run --rm --no-deps s3-backup restore 20261106T020000Z --prefix tenants/org_x/
 ```
+
+`--no-deps` keeps `run` from recreating the `s3` service when its running config
+differs from the file.
 
 Restore writes objects back with their original Content-Type after checking the
 blob SHA-256, skips objects that are already identical and never deletes objects

@@ -53,8 +53,8 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
       dump with a `.sha256`, volume `pgbackups`) and `s3-backup` (incremental object
       snapshots, volume `s3backups`, `docs/object-storage.md`). Both keep
       `BACKUP_RETENTION_DAYS`=7. Run them now with
-      `docker compose -f docker-compose.yml run --rm pg-backup --once` and
-      `... run --rm s3-backup once`, and rehearse `tools/backup/pg-restore.sh <file.dump>`
+      `docker compose -f docker-compose.yml run --rm --no-deps pg-backup --once` and
+      `... run --rm --no-deps s3-backup once`, and rehearse `tools/backup/pg-restore.sh <file.dump>`
       and `s3-backup restore latest --dry-run`. Both volumes live on the same host:
       copying them elsewhere is the operator's choice.
 - [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials (they are
