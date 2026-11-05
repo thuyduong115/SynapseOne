@@ -57,6 +57,13 @@ const VERSION = (() => {
 const IS_PROD = process.env.NODE_ENV === 'production';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuid(s: string): boolean { return UUID_RE.test(s || ''); }
+/** Linear-time email sanity check (avoids CodeQL's polynomial-regex alert). */
+function validScimEmail(value: string): boolean {
+  if (!value || value.length > 320 || /\s/.test(value)) return false;
+  const at = value.indexOf('@');
+  const dot = value.lastIndexOf('.');
+  return at > 0 && dot > at + 1 && dot < value.length - 1 && value.indexOf('@', at + 1) === -1;
+}
 function firstHeader(v: string | string[] | undefined): string {
   return Array.isArray(v) ? (v[0] || '') : (v || '');
 }
@@ -638,6 +645,9 @@ async function auditMutation(req: express.Request, action: string, resource: str
   // Brute-force guard for credential endpoints (in-memory; edge WAF still required in prod).
   const authLimiter = rateLimit(60, 60_000);
   app.use('/v1/auth/', authLimiter as any);
+  // SCIM is machine-to-machine but still needs a brute-force / abuse ceiling.
+  const scimLimiter = rateLimit(120, 60_000);
+  app.use('/scim/', scimLimiter as any);
 
   // ---------- OIDC discovery (Authentik, Keycloak, or any OIDC IdP) ----------
   app.get('/v1/auth/oidc/config', (_req, res) => {
@@ -825,7 +835,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     if (!token) return;
     const b = (req.body || {}) as any;
     const email = String(b.userName || b.emails?.[0]?.value || '').trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 320) return scimError(res, 400, 'userName must be an email', 'invalidValue');
+    if (!validScimEmail(email)) return scimError(res, 400, 'userName must be an email', 'invalidValue');
     if (await findUserByOrgEmail(token.orgId, email)) return scimError(res, 409, 'user already exists', 'uniqueness');
     const user = await upsertUser(token.orgId, email, sanitizeName(b.displayName || b.name?.formatted || email), b.externalId ? String(b.externalId).slice(0, 256) : undefined);
     if (b.externalId) await updateUserProfile(user.id, { externalSub: String(b.externalId).slice(0, 256) });
