@@ -20,22 +20,22 @@ standard OIDC. Everything else is SynapseOne code, pure Apache-2.0.
 
 ## Why SynapseOne
 
-| Capability                         | What you get                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API Gateway**              | Single entry point: JWT/API-key auth, principal propagation (`x-synapseone-*`), edge rate limiting, tracing, aggregate `/ready`, Prometheus `/metrics`                                                                                                                                                            |
-| **AWS-style IAM**            | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), enforced per-route scopes, `authorize` API + dry-run simulator, mutation audit trail, tenant isolation on every write (role-based, same-org fallback)                                                                                |
-| **Flexible identity**        | First-party password lifecycle (register/login/change/reset/verify), TOTP MFA with recovery codes, sign-in lockout, short-lived JWT, atomic rotating refresh tokens, API keys, service accounts, delegated user-token exchange for Tier 2, and real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
-| **Core data**                | Postgres (source of truth) + Redis + SeaweedFS (S3-compatible, Apache-2.0) object storage, versioned schema, idempotent seed, daily Postgres dumps and incremental object snapshots with restore                                                                                                                        |
-| **SynapseBase**              | Self-managed document database: collections, object↔data mapping with validation, filters/cursors, optimistic concurrency, atomic counters, batches and a change feed (`/v1/base`)                                                                                                                                   |
-| **Synapse Faststore**        | Redis-backed cache/KV and data structures: TTL strings, counters, hashes, lists, sets, sorted sets, scans, batches and distributed locks (`/v1/faststore`)                                                                                                                                                            |
-| **SynapseQueue**             | At-least-once messaging: delayed/deduplicated publishing, visibility-timeout leases, ack/nack/heartbeat, retries, dead letters and replay (`/v1/queue`)                                                                                                                                                               |
-| **SynapseStream**            | Tenant-scoped event log over Redis Streams/Kafka with consumer groups, acks and retention (`/v1/stream`)                                                                                                                                                                                                              |
-| **SynapseOCS**               | Tenant-scoped buckets/objects with direct + multipart upload, presigned URLs, checksums, size/type limits and quotas (`/v1/ocs`, legacy `/v1/storage`)                                                                                                                                                              |
-| **SynapseNotifications**     | Durable outbox + `{{var}}` templates, per-recipient preferences/unsubscribe, email/SMS/push relays, webhooks, retries and dead letters (`/v1/notifications`)                                                                                                                                                        |
-| **Workflows**                | Built-in workflow engine (Apache-2.0): DAG runner, versioned templates, activate/deactivate/execute (real webhook & cron triggers), sandboxed code execution, execution history, visual graph editor                                                                                                                    |
-| **Linked Data (SynapseLDS)** | Licence-picked NGSI-LD datasources: structural-allowlist projection (`_core` never serialized), per-attribute visibility (public/restricted/internal), default-deny schema registry, workflow publish node (`lds.publish-record`)                                                                                   |
-| **AI assistant**             | Chatbot on the API Docs page: decision model picks the endpoint, LLM pre-fills the try-it form (server-side key, guidance-only, never public)                                                                                                                                                                           |
-| **Clients**                  | TypeScript, Python and Go SDKs with full API parity, zero-dependency CLI, admin Console                                                                                                                                                                                                                                 |
+| Capability | What you get |
+|---|---|
+| **API Gateway** | Single entry point: JWT/API-key auth, principal propagation (`x-synapseone-*`), edge rate limiting, tracing, aggregate `/ready`, Prometheus `/metrics` |
+| **AWS-style IAM** | Organization → Account → User → Role → JSON Policy (Allow/Deny + Condition), enforced per-route scopes, `authorize` API + dry-run simulator, mutation audit trail, tenant isolation on every write (role-based, same-org fallback) |
+| **Flexible identity** | First-party password lifecycle (register/login/change/reset/verify), TOTP MFA with recovery codes, sign-in lockout, short-lived JWT, atomic rotating refresh tokens, API keys, service accounts, delegated user-token exchange for Tier 2, and real OIDC Authorization Code flow (Authentik/Keycloak) with shadow users |
+| **Core data** | Postgres (source of truth) + Redis + SeaweedFS (S3-compatible, Apache-2.0) object storage, versioned schema, idempotent seed, daily Postgres dumps and incremental object snapshots with restore |
+| **SynapseBase** | Self-managed document database: collections, object↔data mapping with validation, filters/cursors, optimistic concurrency, atomic counters, batches and a change feed (`/v1/base`) |
+| **Synapse Faststore** | Redis-backed cache/KV and data structures: TTL strings, counters, hashes, lists, sets, sorted sets, scans, batches and distributed locks (`/v1/faststore`) |
+| **SynapseQueue** | At-least-once messaging: delayed/deduplicated publishing, visibility-timeout leases, ack/nack/heartbeat, retries, dead letters and replay (`/v1/queue`) |
+| **SynapseStream** | Tenant-scoped event log over Redis Streams/Kafka with consumer groups, acks and retention (`/v1/stream`) |
+| **SynapseOCS** | Tenant-scoped buckets/objects with direct + multipart upload, presigned URLs, checksums, size/type limits and quotas (`/v1/ocs`, legacy `/v1/storage`) |
+| **SynapseNotifications** | Durable outbox + `{{var}}` templates, per-recipient preferences/unsubscribe, email/SMS/push relays, webhooks, retries and dead letters (`/v1/notifications`) |
+| **Workflows** | Built-in workflow engine (Apache-2.0): DAG runner, versioned templates, activate/deactivate/execute (real webhook & cron triggers), sandboxed code execution, execution history, visual graph editor |
+| **Linked Data (SynapseLDS)** | Licence-picked NGSI-LD datasources: structural-allowlist projection (`_core` never serialized), per-attribute visibility (public/restricted/internal), default-deny schema registry, workflow publish node (`lds.publish-record`) |
+| **AI assistant** | Chatbot on the API Docs page: decision model picks the endpoint, LLM pre-fills the try-it form (server-side key, guidance-only, never public) |
+| **Clients** | TypeScript, Python and Go SDKs with full API parity, zero-dependency CLI, admin Console |
 
 ## Try it in 30 seconds
 
@@ -117,16 +117,16 @@ open http://localhost:3000   # sign in: demo@acme.local / org acme
 Production (TLS, edge rate limiting, hardened secrets): `docker-compose.prod.yml` +
 `infra/prod/` (nginx + Let's Encrypt via Certbot). Full checklist: `docs/production.md`.
 
-| Layer     | Endpoint (local)          | Notes                                                                |
-| --------- | ------------------------- | -------------------------------------------------------------------- |
-| Console   | `http://localhost:3000` | Admin UI (React + Vite)                                              |
-| Gateway   | `http://localhost:8080` | The only public API in production                                    |
-| IAM       | `http://localhost:4001` | Internal (behind gateway in prod)                                    |
-| Workflow  | `http://localhost:4002` | Internal (behind gateway in prod)                                    |
-| LDS       | `http://localhost:4004` | Internal — SynapseLDS NGSI-LD datasources (behind gateway in prod)  |
-| Base      | `http://localhost:4005` | Internal — SynapseBase documents + mapping (behind gateway in prod) |
-| Faststore | `http://localhost:4006` | Internal — cache/KV/data structures (behind gateway in prod)        |
-| Queue     | `http://localhost:4007` | Internal — SynapseQueue messaging (behind gateway in prod)          |
+| Layer | Endpoint (local) | Notes |
+|---|---|---|
+| Console | `http://localhost:3000` | Admin UI (React + Vite) |
+| Gateway | `http://localhost:8080` | The only public API in production |
+| IAM | `http://localhost:4001` | Internal (behind gateway in prod) |
+| Workflow | `http://localhost:4002` | Internal (behind gateway in prod) |
+| LDS | `http://localhost:4004` | Internal — SynapseLDS NGSI-LD datasources (behind gateway in prod) |
+| Base | `http://localhost:4005` | Internal — SynapseBase documents + mapping (behind gateway in prod) |
+| Faststore | `http://localhost:4006` | Internal — cache/KV/data structures (behind gateway in prod) |
+| Queue | `http://localhost:4007` | Internal — SynapseQueue messaging (behind gateway in prod) |
 
 ## Architecture
 
@@ -178,30 +178,30 @@ docs                       Start at docs/README.md
 
 ## Documentation
 
-| Guide                       | Content                                                           |
-| --------------------------- | ----------------------------------------------------------------- |
-| `docs/quickstart.md`      | Run in 3 commands, your first flow                                |
-| `docs/api.md`             | Complete API reference                                            |
-| `docs/synapsebase.md`     | SynapseBase — documents, object↔data mapping, queries, changes  |
-| `docs/faststore.md`       | Synapse Faststore — cache/KV, data structures, locks             |
-| `docs/queue.md`           | SynapseQueue — publish, consume, leases, retries, dead letters   |
-| `docs/iam-model.md`       | Authorization model with examples                                 |
-| `docs/configuration.md`   | Every environment variable                                        |
-| `docs/production.md`      | Production checklist (secrets, TLS, edge, backups)                |
-| `docs/console.md`         | Operating the Console                                             |
-| `docs/object-storage.md`  | SynapseOCS bucket/object API, SeaweedFS backend, object backups   |
-| `docs/notifications.md`   | SynapseNotifications — templates, preferences, delivery, retries |
-| `docs/troubleshooting.md` | Common failures and fixes                                         |
+| Guide | Content |
+|---|---|
+| `docs/quickstart.md` | Run in 3 commands, your first flow |
+| `docs/api.md` | Complete API reference |
+| `docs/synapsebase.md` | SynapseBase — documents, object↔data mapping, queries, changes |
+| `docs/faststore.md` | Synapse Faststore — cache/KV, data structures, locks |
+| `docs/queue.md` | SynapseQueue — publish, consume, leases, retries, dead letters |
+| `docs/iam-model.md` | Authorization model with examples |
+| `docs/configuration.md` | Every environment variable |
+| `docs/production.md` | Production checklist (secrets, TLS, edge, backups) |
+| `docs/console.md` | Operating the Console |
+| `docs/object-storage.md` | SynapseOCS bucket/object API, SeaweedFS backend, object backups |
+| `docs/notifications.md` | SynapseNotifications — templates, preferences, delivery, retries |
+| `docs/troubleshooting.md` | Common failures and fixes |
 
 ## Common commands
 
-| Command                                     | Description                                           |
-| ------------------------------------------- | ----------------------------------------------------- |
-| `make bootstrap`                          | Copy `.env` + install all workspaces                |
-| `make build` / `make test`              | Build / test the entire monorepo                      |
-| `make compose-up` / `make compose-down` | Start / stop the platform                             |
-| `bash tests/e2e/api-check.sh`             | Full API e2e (requires `jq`)                        |
-| `make sdk-check`                          | Live SDK check, JS + Python (needs a running gateway) |
+| Command | Description |
+|---|---|
+| `make bootstrap` | Copy `.env` + install all workspaces |
+| `make build` / `make test` | Build / test the entire monorepo |
+| `make compose-up` / `make compose-down` | Start / stop the platform |
+| `bash tests/e2e/api-check.sh` | Full API e2e (requires `jq`) |
+| `make sdk-check` | Live SDK check, JS + Python (needs a running gateway) |
 
 ## Contributing · Security · License
 
