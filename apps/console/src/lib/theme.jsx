@@ -24,7 +24,7 @@ function systemPrefersDark() {
   return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 }
 
-/** Mirrors the inline script in index.html so the first paint already has the right theme. */
+/** Mirrors public/theme-init.js so the first paint already has the right theme. */
 function apply(choice) {
   const dark = choice === 'dark' || (choice === 'system' && systemPrefersDark());
   const root = document.documentElement;

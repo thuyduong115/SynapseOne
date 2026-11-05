@@ -9,18 +9,7 @@
     <meta name="description" content="SynapseOne là nền tảng PaaS Tầng 1 mã nguồn mở (Apache-2.0): cổng API, IAM kiểu AWS, cụm dữ liệu lõi và quy trình, quản lý qua Console, SDK đa ngôn ngữ và CLI." />
     <meta name="theme-color" content="#f6f7fb" />
     <title>SynapseOne Console · Nền tảng PaaS mở</title>
-    <script>
-      // Apply the saved theme and language before first paint (mirrors src/lib/theme.jsx and src/lib/i18n.jsx).
-      (function () {
-        var root = document.documentElement;
-        var choice = 'system';
-        try { choice = localStorage.getItem('synapseone.theme') || 'system'; } catch (e) {}
-        var dark = choice === 'dark' || (choice === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        if (dark) root.classList.add('dark');
-        root.style.colorScheme = dark ? 'dark' : 'light';
-        try { var lang = localStorage.getItem('synapseone.lang'); if (lang === 'vi' || lang === 'en') root.lang = lang; } catch (e) {}
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
