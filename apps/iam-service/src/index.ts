@@ -7,6 +7,7 @@
 import './env-compat';
 import express from 'express';
 import cors from 'cors';
+import expressRateLimit from 'express-rate-limit';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { createHmac } from 'crypto';
@@ -752,6 +753,15 @@ async function auditMutation(req: express.Request, action: string, resource: str
   // SCIM is machine-to-machine but still needs a brute-force / abuse ceiling.
   const scimLimiter = rateLimit(120, 60_000);
   app.use('/scim/', scimLimiter as any);
+  // Per-route ceiling for second-factor and account-recovery endpoints
+  // (per-user lockout in mfa.ts is the primary brute-force defence).
+  const mfaLimiter = expressRateLimit({
+    windowMs: 60_000,
+    limit: Math.max(1, Number(process.env.IAM_MFA_RATE_LIMIT_PER_MIN) || 60),
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'Too many requests, slow down' },
+  });
 
   // ---------- OIDC discovery (Authentik, Keycloak, or any OIDC IdP) ----------
   app.get('/v1/auth/oidc/config', (_req, res) => {
@@ -1279,7 +1289,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
 
   // ---------- Multi-factor authentication (TOTP) ----------
   // Step 2 of a login that returned 401 mfa_required.
-  app.post('/v1/auth/mfa/verify', async (req, res) => {
+  app.post('/v1/auth/mfa/verify', mfaLimiter, async (req, res) => {
     const parsed = z.object({
       mfaToken: z.string().min(1).max(4096),
       code: z.string().trim().max(16).nullish(),
@@ -1316,7 +1326,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ ...session, mfa: { method: result.method, recoveryCodesRemaining: result.remainingRecovery } });
   });
 
-  app.get('/v1/auth/mfa', async (req, res) => {
+  app.get('/v1/auth/mfa', mfaLimiter, async (req, res) => {
     const caller = await requireUserCaller(req, res);
     if (!caller) return;
     const rec = await getMfa(caller.id);
@@ -1330,7 +1340,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     });
   });
 
-  app.post('/v1/auth/mfa/totp/setup', async (req, res) => {
+  app.post('/v1/auth/mfa/totp/setup', mfaLimiter, async (req, res) => {
     const caller = await requireUserCaller(req, res);
     if (!caller) return;
     const started = await beginTotpEnrolment(caller.id);
@@ -1339,7 +1349,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ secret: started.secret, otpauthUrl: otpauthUrl(started.secret, caller.email), period: TOTP_PERIOD, digits: TOTP_DIGITS, algorithm: 'SHA1' });
   });
 
-  app.post('/v1/auth/mfa/totp/enable', async (req, res) => {
+  app.post('/v1/auth/mfa/totp/enable', mfaLimiter, async (req, res) => {
     const caller = await requireUserCaller(req, res);
     if (!caller) return;
     const parsed = z.object({ code: z.string().trim().max(16) }).safeParse(req.body);
@@ -1358,7 +1368,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ enabled: true, recoveryCodes });
   });
 
-  app.post('/v1/auth/mfa/recovery-codes', async (req, res) => {
+  app.post('/v1/auth/mfa/recovery-codes', mfaLimiter, async (req, res) => {
     const caller = await requireUserCaller(req, res);
     if (!caller) return;
     const parsed = z.object({ code: z.string().trim().max(16) }).safeParse(req.body);
@@ -1375,7 +1385,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ recoveryCodes });
   });
 
-  app.post('/v1/auth/mfa/disable', async (req, res) => {
+  app.post('/v1/auth/mfa/disable', mfaLimiter, async (req, res) => {
     const caller = await requireUserCaller(req, res);
     if (!caller) return;
     const parsed = z.object({
@@ -2467,7 +2477,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
 
   // Lost authenticator: an org administrator removes the user's second
   // factor (the user enrols again) and clears any login lockout.
-  app.delete('/v1/users/:userId/mfa', async (req, res) => {
+  app.delete('/v1/users/:userId/mfa', mfaLimiter, async (req, res) => {
     const user = await orgAdminTarget(req, res, TRUST_STAMPED);
     if (!user) return;
     const removed = await removeMfa(user.id);
@@ -2476,7 +2486,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ ok: true, removed });
   });
 
-  app.post('/v1/users/:userId/unlock', async (req, res) => {
+  app.post('/v1/users/:userId/unlock', mfaLimiter, async (req, res) => {
     const user = await orgAdminTarget(req, res, TRUST_STAMPED);
     if (!user) return;
     await clearLoginFailures(user.id);

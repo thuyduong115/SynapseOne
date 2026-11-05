@@ -14,7 +14,7 @@
  *   that verifyAccess() never accepts, so it cannot be used as an access token.
  * - Failed password / second-factor attempts lock the user temporarily.
  */
-import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { eq, sql } from 'drizzle-orm';
 import { ensureTables, getDb } from './db';
@@ -143,9 +143,8 @@ export function newRecoveryCodes(): { codes: string[]; hashes: string[] } {
   const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
   const codes: string[] = [];
   for (let i = 0; i < RECOVERY_COUNT; i++) {
-    const bytes = randomBytes(8);
     let s = '';
-    for (const b of bytes) s += alphabet[b % alphabet.length];
+    for (let j = 0; j < 8; j++) s += alphabet[randomInt(alphabet.length)];
     codes.push(`${s.slice(0, 4)}-${s.slice(4)}`);
   }
   return { codes, hashes: codes.map(hashRecovery) };

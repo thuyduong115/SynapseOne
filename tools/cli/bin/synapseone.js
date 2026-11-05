@@ -505,8 +505,9 @@ async function cmdKeys(o) {
     const scopes = o.scopes ? String(o.scopes).split(',').map((x) => x.trim()).filter(Boolean) : ['*'];
     const body = { name: o.name || o.label || 'cli', scopes, ...(o.user ? { userId: o.user } : {}) };
     const r = await POST(`/v1/accounts/${encodeURIComponent(rest[0])}/keys`, body, o);
-    if (!o.json) console.log(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}`);
-    else console.log(JSON.stringify(r, null, 2));
+    // The new secret is printed to stdout once, on purpose (never to a log).
+    if (!o.json) process.stdout.write(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}\n`);
+    else process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     return;
   }
   if (sub === 'rotate') {
@@ -514,8 +515,9 @@ async function cmdKeys(o) {
     const graceSeconds = o.grace === undefined ? 0 : Number(o.grace);
     if (!Number.isInteger(graceSeconds) || graceSeconds < 0) throw new Error('--grace must be a non-negative integer (seconds)');
     const r = await POST(`/v1/keys/${encodeURIComponent(rest[0])}/rotate`, { graceSeconds }, o);
-    if (!o.json) console.log(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}\nold key ${r.rotatedFrom} expires at ${r.oldKeyExpiresAt}`);
-    else console.log(JSON.stringify(r, null, 2));
+    // The new secret is printed to stdout once, on purpose (never to a log).
+    if (!o.json) process.stdout.write(`SAVE THIS KEY (shown once):\n${r.apiKey}\nid: ${r.id}\nold key ${r.rotatedFrom} expires at ${r.oldKeyExpiresAt}\n`);
+    else process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     return;
   }
   if (sub === 'revoke' || sub === 'delete') {
@@ -580,14 +582,14 @@ async function cmdMfa(o) {
   if (sub === 'setup') {
     const r = await POST('/v1/auth/mfa/totp/setup', {}, o);
     if (o.json) return out(r, o);
-    console.log(`Add this account to your authenticator app, then run: mfa enable <code>\n  secret: ${r.secret}\n  url:    ${r.otpauthUrl}`);
+    process.stdout.write(`Add this account to your authenticator app, then run: mfa enable <code>\n  secret: ${r.secret}\n  url:    ${r.otpauthUrl}\n`);
     return;
   }
   if (sub === 'enable') {
     need(arg || code, 'code');
     const r = await POST('/v1/auth/mfa/totp/enable', { code: arg || code }, o);
     if (o.json) return out(r, o);
-    console.log(`MFA enabled. Store these recovery codes safely (shown once):\n  ${r.recoveryCodes.join('\n  ')}`);
+    process.stdout.write(`MFA enabled. Store these recovery codes safely (shown once):\n  ${r.recoveryCodes.join('\n  ')}\n`);
     return;
   }
   if (sub === 'recovery-codes') {
