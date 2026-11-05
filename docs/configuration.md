@@ -46,6 +46,7 @@ reads which key (audited from source):
 | `IAM_MFA_ENCRYPTION_KEY` | — (HKDF of `IAM_JWT_SECRET`) | 32-byte key (hex/base64) sealing TOTP secrets with AES-256-GCM. Set it explicitly in production; changing it invalidates enrolled authenticators |
 | `IAM_MFA_ISSUER` | `SynapseOne` | issuer label in the `otpauth://` URL shown by authenticator apps |
 | `IAM_LOGIN_MAX_FAILURES` / `IAM_LOGIN_LOCKOUT_SECONDS` | `5` / `900` | consecutive wrong passwords or MFA codes before a temporary lock (`429 account_locked` + `Retry-After`); org admins can `POST /v1/users/:id/unlock` |
+| `IAM_LOGIN_RATE_LIMIT_PER_MIN` / `IAM_MFA_RATE_LIMIT_PER_MIN` | `60` / `60` | per-IP request ceiling on `POST /v1/auth/login` and on the MFA, MFA-reset and unlock routes (`429 rate_limited`); complements the per-user lockout |
 | `AUDIT_RETENTION_DAYS` | `0` (disabled) | hourly purge of `audit_log` rows older than N days (batched, clamped 1–3650); prod e.g. `180` |
 | `AUDIT_TRAIL` | `true` | data-plane services (Base/Faststore/Queue/Stream/Workflow/LDS) emit one mutation audit event per write to IAM (`POST /v1/audit/ingest`). Set `false` only in local dev |
 | `AUDIT_INGEST_URL` | `${IAM_SERVICE_URL}/v1/audit/ingest` | override the data-plane audit sink (tests/staging) |

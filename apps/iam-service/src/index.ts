@@ -762,6 +762,14 @@ async function auditMutation(req: express.Request, action: string, resource: str
     legacyHeaders: false,
     message: { error: 'rate_limited', message: 'Too many requests, slow down' },
   });
+  // Same ceiling on password/dev sign-in (per-user lockout lives in mfa.ts).
+  const loginLimiter = expressRateLimit({
+    windowMs: 60_000,
+    limit: Math.max(1, Number(process.env.IAM_LOGIN_RATE_LIMIT_PER_MIN) || 60),
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'Too many sign-in attempts, slow down' },
+  });
 
   // ---------- OIDC discovery (Authentik, Keycloak, or any OIDC IdP) ----------
   app.get('/v1/auth/oidc/config', (_req, res) => {
@@ -1222,7 +1230,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json({ ok: true });
   });
 
-  app.post('/v1/auth/login', async (req, res) => {
+  app.post('/v1/auth/login', loginLimiter, async (req, res) => {
     const schema = z.object({
       email: z.string().trim().toLowerCase().email().max(320),
       password: z.string().max(PASSWORD_MAX).optional(),
