@@ -44,6 +44,8 @@ const ApiDocs = React.lazy(() => import('./pages/ApiDocs.jsx'));
 const Docs = React.lazy(() => import('./pages/Docs.jsx'));
 
 import { appLoginUrl, isCanonicalAppHost } from './lib/site.js';
+import { LanguageProvider } from './lib/i18n.jsx';
+import { ThemeProvider } from './lib/theme.jsx';
 
 function Guard({ children }) {
   const { auth } = useAuth();
@@ -127,6 +129,16 @@ function ResettingBoundary({ children }) {
 }
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <LanguageProvider>
+        <AppRoutes />
+      </LanguageProvider>
+    </ThemeProvider>
+  );
+}
+
+function AppRoutes() {
   return (
     <ResettingBoundary>
       <ScrollToTop />

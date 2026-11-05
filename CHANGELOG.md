@@ -5,6 +5,21 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Changed: Console public pages and shell
+- Vietnamese/English switch and light/dark/system theme on the public pages, sign-in
+  and the console top bar. The choice is saved per browser and applied before first
+  paint. Vietnamese is the default.
+- Dark theme for the whole Console through shared colour tokens in `index.css`.
+- Home and About use a quieter layout: left-aligned headings, one hairline grid for
+  the platform features, terminal panels for the CLI and self-host commands, and a
+  drawn tier stack instead of ASCII art. About lists the team and partner
+  organisations, and every public page has a full footer (product, project, support
+  and licence links).
+- Font changed to Be Vietnam Pro (JetBrains Mono for code), which renders stacked
+  Vietnamese diacritics correctly.
+- Navigation labels keep the width of their longest translation, so switching the
+  language no longer moves the header buttons.
+
 ### Added — MFA, sign-in lockout, production object storage and backups
 - **TOTP multi-factor authentication** (RFC 6238, no new dependencies): enrol with
   `POST /v1/auth/mfa/totp/setup` + `/enable` (10 single-use recovery codes),
