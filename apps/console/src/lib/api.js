@@ -123,6 +123,24 @@ const del = (path, auth) => req(path, { method: 'DELETE', ...auth });
 // Pages that fetch() directly bypass token rotation — use this instead.
 const call = (method, path, body, auth) => req(path, { method, body, ...auth });
 
+async function uploadBinary(path, body, contentType, auth) {
+  const headers = { 'Content-Type': contentType || 'application/octet-stream' };
+  const token = auth?.token || authStore.get()?.token;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${baseUrl()}${path}`, { method: 'PUT', headers, body });
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) throw new SynapseOneError(response.status, path, data);
+  return data;
+}
+
+function ocsObjectPath(bucket, key) {
+  const encodedBucket = encodeURIComponent(bucket);
+  const encodedKey = String(key || '').split('/').map((part) => encodeURIComponent(part)).join('/');
+  return `/v1/ocs/buckets/${encodedBucket}/objects/${encodedKey}`;
+}
+
 export const api = {
   call,
   login: (email, orgSlug) => post('/v1/auth/login', { email, orgSlug }),
@@ -193,6 +211,26 @@ export const api = {
   createCredential: (accountId, name, kind, secret, a) => post('/v1/credentials', { accountId, name, kind, secret }, a),
   deleteCredential: (id, a) => del(`/v1/credentials/${encodeURIComponent(id)}`, a),
   agent: (question, history, a) => post('/v1/ai/agent', { question, history }, a),
+  // ---- SynapseOCS (object cloud storage) ----
+  ocsBuckets: (a) => get('/v1/ocs/buckets?withStats=1', a),
+  ocsCreateBucket: (name, quotaBytes, a) =>
+    post('/v1/ocs/buckets', { name, ...(quotaBytes ? { quotaBytes: Number(quotaBytes) } : {}) }, a),
+  ocsBucket: (name, a) => get(`/v1/ocs/buckets/${encodeURIComponent(name)}`, a),
+  ocsDeleteBucket: (name, force, a) =>
+    del(`/v1/ocs/buckets/${encodeURIComponent(name)}${force ? '?force=true' : ''}`, a),
+  ocsObjects: (bucket, params, a) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params || {})) {
+      if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+    }
+    const s = qs.toString();
+    return get(`/v1/ocs/buckets/${encodeURIComponent(bucket)}/objects${s ? `?${s}` : ''}`, a);
+  },
+  ocsPutObject: (bucket, key, file, contentType, a) =>
+    uploadBinary(ocsObjectPath(bucket, key), file, contentType, a),
+  ocsDeleteObject: (bucket, key, a) => del(ocsObjectPath(bucket, key), a),
+  ocsPresign: (bucket, key, method, expiresIn, a) =>
+    post(`/v1/ocs/buckets/${encodeURIComponent(bucket)}/presign`, { key, method: method || 'GET', expiresIn: expiresIn || 300 }, a),
   // ---- SynapseLDS (linked data service) ----
   ldsLicenses: (a) => get('/v1/lds/licenses', a),
   ldsDatasources: (a) => get('/v1/lds/datasources', a),

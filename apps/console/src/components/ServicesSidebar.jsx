@@ -18,6 +18,7 @@ import {
   faCode,
   faBrain,
   faStream,
+  faCloud,
 } from '@fortawesome/free-solid-svg-icons';
 
 export const PLATFORM_SERVICES = [
@@ -68,6 +69,18 @@ export const PLATFORM_SERVICES = [
     shadowColor: 'rgba(244, 63, 94, 0.28)',
     match: (p) => p.startsWith('/stream'),
     keywords: ['stream', 'streaming', 'kafka', 'events', 'consumer group', 'replay', 'telemetry', 'topic', 'log'],
+  },
+  {
+    to: '/ocs',
+    label: 'SynapseOCS',
+    category: 'Object Cloud Storage',
+    desc: 'Buckets, objects, signed URLs, multipart upload & tenant quotas',
+    icon: faCloud,
+    iconColor: 'from-sky-400 to-blue-600',
+    bgGradient: 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+    shadowColor: 'rgba(14, 165, 233, 0.28)',
+    match: (p) => p.startsWith('/ocs'),
+    keywords: ['ocs', 'object storage', 'bucket', 'minio', 's3', 'file', 'upload', 'download', 'presign', 'multipart'],
   },
   {
     to: '/faststore',
