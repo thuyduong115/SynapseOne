@@ -52,7 +52,7 @@ jobs:
       - run: ruff check sdks/sdk-python apps/inference-service && ruff format --check sdks/sdk-python apps/inference-service
       - name: Edge nginx config guard
         run: |
-          if grep -RIn '^[[:space:]]*//' infra/prod/*.conf; then
+          if grep -RIn '^[[:space:]]*//' infra/prod/*.conf apps/console/nginx.conf; then
             echo 'nginx configs must use # comments, not //' >&2
             exit 1
           fi
