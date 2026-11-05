@@ -127,6 +127,68 @@ export class WorkflowService {
     return this.http.req(`/v1/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
+  // ---- durable human tasks (#44) ----
+  /** Create a standalone human task (workflow nodes create theirs on pause). */
+  createHumanTask(input: {
+    title: string; description?: string; assignee?: string; candidateRoles?: string[];
+    deadline?: string; decisionSchema?: Record<string, unknown>; payload?: Record<string, unknown>;
+    workflowId?: string; executionId?: string; node?: string;
+  }) {
+    return this.http.req('/v1/human-tasks', { method: 'POST', body: JSON.stringify(input) });
+  }
+  listHumanTasks(query: Record<string, string | number | boolean | undefined> = {}) {
+    const allowed = ['status', 'executionId', 'workflowId', 'assignee', 'limit', 'offset'] as const;
+    const params = new URLSearchParams();
+    for (const k of allowed) {
+      const v = query[k];
+      if (v !== undefined && v !== null && String(v) !== '') params.set(k, String(v));
+    }
+    const s = params.toString();
+    return this.http.req(`/v1/human-tasks${s ? `?${s}` : ''}`);
+  }
+  getHumanTask(id: string) { return this.http.req(`/v1/human-tasks/${encodeURIComponent(id)}`); }
+  claimHumanTask(id: string) { return this.http.req(`/v1/human-tasks/${encodeURIComponent(id)}/claim`, { method: 'POST', body: '{}' }); }
+  completeHumanTask(id: string, decision: Record<string, unknown> = {}, note?: string) {
+    return this.http.req(`/v1/human-tasks/${encodeURIComponent(id)}/complete`, {
+      method: 'POST', body: JSON.stringify({ decision, ...(note ? { note } : {}) }),
+    });
+  }
+  rejectHumanTask(id: string, note: string, decision: Record<string, unknown> = {}) {
+    return this.http.req(`/v1/human-tasks/${encodeURIComponent(id)}/reject`, {
+      method: 'POST', body: JSON.stringify({ note, decision }),
+    });
+  }
+  expireHumanTask(id: string, force = false) {
+    return this.http.req(`/v1/human-tasks/${encodeURIComponent(id)}/expire`, {
+      method: 'POST', body: JSON.stringify({ force }),
+    });
+  }
+
+  // ---- tenant secret vault (#47) ----
+  createSecret(name: string, value: string, opts: { description?: string; scope?: string; accountId?: string } = {}) {
+    return this.http.req('/v1/secrets', { method: 'POST', body: JSON.stringify({ name, value, ...opts }) });
+  }
+  listSecrets() { return this.http.req('/v1/secrets'); }
+  getSecret(name: string) { return this.http.req(`/v1/secrets/${encodeURIComponent(name)}`); }
+  readSecret(name: string, version?: number) {
+    return this.http.req(`/v1/secrets/${encodeURIComponent(name)}/read`, {
+      method: 'POST', body: JSON.stringify(version ? { version } : {}),
+    });
+  }
+  rotateSecret(name: string, value: string, graceSeconds = 86400) {
+    return this.http.req(`/v1/secrets/${encodeURIComponent(name)}/rotate`, {
+      method: 'POST', body: JSON.stringify({ value, graceSeconds }),
+    });
+  }
+  revokeSecret(name: string, version?: number) {
+    return this.http.req(`/v1/secrets/${encodeURIComponent(name)}/revoke`, {
+      method: 'POST', body: JSON.stringify(version ? { version } : {}),
+    });
+  }
+  deleteSecret(name: string) {
+    return this.http.req(`/v1/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  }
+
   // ---- public inbound webhooks ----
   /**
    * Fire a public inbound webhook through the gateway: `ANY /webhook/:path`.

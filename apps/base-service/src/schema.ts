@@ -78,3 +78,30 @@ export const baseVectors = pgTable(
     index('idx_base_vectors_lookup').on(t.collectionId, t.fieldName),
   ],
 );
+
+/** Tenant-scoped search index over Base documents (#46). Rebuilt
+ *  idempotently from collections; ACL and text are denormalised so a query
+ *  never has to join across tenants. */
+export const searchIndex = pgTable(
+  'synapseone_search_index',
+  {
+    id: text('id').primaryKey(),
+    collectionId: text('collection_id').notNull(),
+    collectionName: text('collection_name').notNull().default(''),
+    documentId: text('document_id').notNull(),
+    orgId: text('org_id'),
+    accountId: text('account_id'),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull().default(''),
+    acl: jsonb('acl').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    embedding: jsonb('embedding').$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('idx_search_document').on(t.collectionId, t.documentId),
+    index('idx_search_tenant').on(t.orgId, t.accountId),
+    index('idx_search_collection').on(t.collectionId),
+  ],
+);

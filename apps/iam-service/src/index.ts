@@ -21,13 +21,19 @@ import {
   getRoleById, getPolicyById, getAccountById, accountsForUser, getOrgById,
   policiesForRole, rolesForUser, ensureTables,
   setUserPassword, markEmailVerified, storeOneTimeToken, consumeOneTimeToken,
+  setUserActive, updateUserProfile,
 } from './db';
+import {
+  createScimToken, listScimTokens, revokeScimToken, verifyScimToken,
+  listScimGroups, getScimGroup, createScimGroup, updateScimGroup, deleteScimGroup,
+  toScimUser, toScimGroup, parseScimFilter, matchesScimFilter,
+} from './scim';
 import { evaluatePolicies, validatePolicyDocument } from './policy';
 import {
   signAccess, newRefreshToken, storeRefresh, consumeRefresh, revokeRefresh, revokeAllRefresh,
   consumeAndRevokeRefresh, findRefreshOwner, refreshExpiry, revokeApiKey, createApiKeyRecord,
   verifyApiKey, verifyAccess, listApiKeys, findApiKeyById, signDelegated,
-  listRefreshSessions, revokeRefreshById,
+  listRefreshSessions, revokeRefreshById, revokeApiKeysForUser,
 } from './tokens';
 import { secretsEqual, hashCandidates } from './db';
 import { ingestUsageEvents, listUsageEvents, purgeUsage, usageSummary, type UsageFilter } from './usage';
@@ -557,6 +563,8 @@ async function auditMutation(req: express.Request, action: string, resource: str
     // Gateway telemetry + data-plane audit ingest: authenticated by the shared
     // internal secret in the handler itself (no end-user credential).
     if (p === '/v1/usage/ingest' || p === '/v1/audit/ingest') return next();
+    // SCIM carries its own scoped bearer token (never a user session).
+    if (p.startsWith('/scim/')) return next();
     if (INTERNAL_SECRET) {
       const got = firstHeader((req.headers['x-synapseone-internal'] ?? req.headers['x-synapsedx-internal']) as any);
       if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
@@ -745,6 +753,351 @@ async function auditMutation(req: express.Request, action: string, resource: str
   //  1. email + password (first-party credential; works in production),
   //  2. email only when IAM_ALLOW_DEV_LOGIN=true (dev/test passwordless),
   //  3. OIDC code exchange (see /v1/auth/oidc/callback).
+  // ---------- SCIM 2.0 provisioning (#48) ----------
+  async function scimContext(req: express.Request, res: express.Response, write = false) {
+    const h = firstHeader(req.headers.authorization as any);
+    if (!h.startsWith('Bearer ')) {
+      res.status(401).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], detail: 'SCIM bearer token required', status: '401' });
+      return null;
+    }
+    const token = await verifyScimToken(h.slice(7));
+    if (!token) {
+      res.status(401).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], detail: 'invalid or expired SCIM token', status: '401' });
+      return null;
+    }
+    if (write && !token.scopes.includes('scim:write')) {
+      res.status(403).json({ schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], detail: 'scim:write scope required', status: '403' });
+      return null;
+    }
+    return token;
+  }
+
+  function scimList(resources: any[], startIndex: number, count: number, total?: number) {
+    const totalResults = total ?? resources.length;
+    const start = Math.max(1, startIndex);
+    const page = resources.slice(start - 1, start - 1 + count);
+    return {
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'],
+      totalResults,
+      startIndex: start,
+      itemsPerPage: page.length,
+      Resources: page,
+    };
+  }
+
+  function scimError(res: express.Response, status: number, detail: string, scimType?: string) {
+    res.status(status).json({
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+      detail, status: String(status), ...(scimType ? { scimType } : {}),
+    });
+  }
+
+  async function scimUserView(user: any, orgId: string) {
+    const groups = await listScimGroups(orgId);
+    return toScimUser(user, groups);
+  }
+
+  app.get('/scim/v2/Users', async (req, res) => {
+    const token = await scimContext(req, res);
+    if (!token) return;
+    const users = await listUsers(token.orgId);
+    const filter = parseScimFilter((req.query as any).filter);
+    if ((req.query as any).filter && !filter) return scimError(res, 400, 'unsupported filter', 'invalidFilter');
+    const groups = await listScimGroups(token.orgId);
+    const views = users.map((u) => toScimUser(u, groups)).filter((v) => matchesScimFilter(v, filter));
+    const startIndex = Number((req.query as any).startIndex) || 1;
+    const count = Math.min(Math.max(Number((req.query as any).count) || 100, 1), 1000);
+    res.setHeader('cache-control', 'no-store');
+    res.json(scimList(views, startIndex, count));
+  });
+
+  app.get('/scim/v2/Users/:id', async (req, res) => {
+    const token = await scimContext(req, res);
+    if (!token) return;
+    if (!isUuid(req.params.id)) return scimError(res, 404, 'user not found');
+    const user = await getUserById(req.params.id);
+    if (!user || user.org_id !== token.orgId) return scimError(res, 404, 'user not found');
+    res.json(await scimUserView(user, token.orgId));
+  });
+
+  app.post('/scim/v2/Users', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    const b = (req.body || {}) as any;
+    const email = String(b.userName || b.emails?.[0]?.value || '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || email.length > 320) return scimError(res, 400, 'userName must be an email', 'invalidValue');
+    if (await findUserByOrgEmail(token.orgId, email)) return scimError(res, 409, 'user already exists', 'uniqueness');
+    const user = await upsertUser(token.orgId, email, sanitizeName(b.displayName || b.name?.formatted || email), b.externalId ? String(b.externalId).slice(0, 256) : undefined);
+    if (b.externalId) await updateUserProfile(user.id, { externalSub: String(b.externalId).slice(0, 256) });
+    if (b.active === false) await setUserActive(user.id, false);
+    const fresh = await getUserById(user.id);
+    await auditMutation(req, 'iam:scim:user:create', `user:${user.id}`, { org: token.orgId, email, tokenId: token.id });
+    res.status(201).setHeader('location', `/scim/v2/Users/${user.id}`);
+    res.json(await scimUserView(fresh || user, token.orgId));
+  });
+
+  app.put('/scim/v2/Users/:id', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    if (!isUuid(req.params.id)) return scimError(res, 404, 'user not found');
+    const user = await getUserById(req.params.id);
+    if (!user || user.org_id !== token.orgId) return scimError(res, 404, 'user not found');
+    const b = (req.body || {}) as any;
+    const email = String(b.userName || b.emails?.[0]?.value || user.email).trim().toLowerCase();
+    if (email !== user.email) return scimError(res, 409, 'userName is immutable; use deactivate + create', 'mutability');
+    const displayName = b.displayName || b.name?.formatted;
+    if (displayName !== undefined || b.externalId !== undefined || b.active !== undefined) {
+      await updateUserProfile(user.id, {
+        ...(displayName !== undefined ? { displayName: sanitizeName(displayName) } : {}),
+        ...(b.externalId !== undefined ? { externalSub: b.externalId ? String(b.externalId).slice(0, 256) : null } : {}),
+      });
+      if (b.active !== undefined) {
+        const active = b.active !== false;
+        await setUserActive(user.id, active);
+        if (!active) {
+          await revokeAllRefresh(user.id);
+          await revokeApiKeysForUser(user.id);
+        }
+      }
+      await auditMutation(req, 'iam:scim:user:replace', `user:${user.id}`, { org: token.orgId, tokenId: token.id });
+    }
+    const fresh = await getUserById(user.id);
+    res.json(await scimUserView(fresh || user, token.orgId));
+  });
+
+  app.patch('/scim/v2/Users/:id', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    if (!isUuid(req.params.id)) return scimError(res, 404, 'user not found');
+    const user = await getUserById(req.params.id);
+    if (!user || user.org_id !== token.orgId) return scimError(res, 404, 'user not found');
+    const ops = (req.body || {}).Operations;
+    if (!Array.isArray(ops) || !ops.length) return scimError(res, 400, 'Operations[] required', 'invalidSyntax');
+    let displayName: string | undefined;
+    let externalSub: string | null | undefined;
+    let active: boolean | undefined;
+    for (const op of ops.slice(0, 50)) {
+      const verb = String(op?.op || '').toLowerCase();
+      const path = String(op?.path || '').toLowerCase();
+      if (verb === 'replace' || verb === 'add') {
+        if (path === 'active' || (!path && op?.value && typeof op.value === 'object' && 'active' in op.value)) {
+          const value = path ? op.value : op.value.active;
+          if (typeof value !== 'boolean') return scimError(res, 400, 'active must be boolean', 'invalidValue');
+          active = value;
+        } else if (path === 'displayname' || path === 'name.formatted') {
+          displayName = sanitizeName(op.value);
+        } else if (path === 'externalid') {
+          externalSub = op.value ? String(op.value).slice(0, 256) : null;
+        } else {
+          return scimError(res, 400, `unsupported patch path '${op?.path || '(none)'}'`, 'invalidPath');
+        }
+      } else if (verb === 'remove' && path === 'active') {
+        return scimError(res, 400, 'active is required', 'invalidPath');
+      } else {
+        return scimError(res, 400, `unsupported operation '${op?.op}'`, 'invalidSyntax');
+      }
+    }
+    if (displayName !== undefined || externalSub !== undefined) {
+      await updateUserProfile(user.id, { ...(displayName !== undefined ? { displayName } : {}), ...(externalSub !== undefined ? { externalSub } : {}) });
+    }
+    if (active !== undefined) {
+      await setUserActive(user.id, active);
+      if (!active) {
+        await revokeAllRefresh(user.id);
+        await revokeApiKeysForUser(user.id);
+      }
+    }
+    await auditMutation(req, 'iam:scim:user:patch', `user:${user.id}`, { org: token.orgId, tokenId: token.id, active });
+    const fresh = await getUserById(user.id);
+    res.json(await scimUserView(fresh || user, token.orgId));
+  });
+
+  app.delete('/scim/v2/Users/:id', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    if (!isUuid(req.params.id)) return scimError(res, 404, 'user not found');
+    const user = await getUserById(req.params.id);
+    if (!user || user.org_id !== token.orgId) return scimError(res, 404, 'user not found');
+    await setUserActive(user.id, false);
+    const revokedSessions = await revokeAllRefresh(user.id);
+    const revokedKeys = await revokeApiKeysForUser(user.id);
+    await auditMutation(req, 'iam:scim:user:deactivate', `user:${user.id}`, { org: token.orgId, tokenId: token.id, revokedSessions, revokedKeys });
+    res.status(204).end();
+  });
+
+  // ---- SCIM Groups ----
+  async function scimGroupView(group: any): Promise<any> {
+    const view = toScimGroup(group);
+    view.members = await Promise.all(group.members.map(async (id: string) => {
+      const user = await getUserById(id);
+      return { value: id, ...(user ? { display: user.email } : {}) };
+    }));
+    return view;
+  }
+
+  async function applyGroupRoles(orgId: string, group: any, memberIds: string[]): Promise<void> {
+    if (!group.account_id || !group.roles?.length) return;
+    const roles = await listRoles(group.account_id);
+    for (const userId of memberIds) {
+      const user = await getUserById(userId);
+      if (!user || user.org_id !== orgId) continue;
+      for (const slug of group.roles) {
+        const role = roles.find((r) => r.slug === slug);
+        if (role) await assignRole(userId, role.id);
+      }
+    }
+  }
+
+  async function revokeGroupRoles(orgId: string, group: any, memberIds: string[]): Promise<void> {
+    if (!group.account_id || !group.roles?.length) return;
+    const roles = await listRoles(group.account_id);
+    for (const userId of memberIds) {
+      const user = await getUserById(userId);
+      if (!user || user.org_id !== orgId) continue;
+      for (const slug of group.roles) {
+        const role = roles.find((r) => r.slug === slug);
+        if (role) await unassignRole(userId, role.id);
+      }
+    }
+  }
+
+  app.get('/scim/v2/Groups', async (req, res) => {
+    const token = await scimContext(req, res);
+    if (!token) return;
+    const groups = await listScimGroups(token.orgId);
+    const filter = parseScimFilter((req.query as any).filter);
+    if ((req.query as any).filter && !filter) return scimError(res, 400, 'unsupported filter', 'invalidFilter');
+    const views = await Promise.all(groups.map(scimGroupView));
+    const filtered = views.filter((v) => matchesScimFilter(v, filter));
+    res.json(scimList(filtered, Number((req.query as any).startIndex) || 1, Math.min(Math.max(Number((req.query as any).count) || 100, 1), 1000)));
+  });
+
+  app.get('/scim/v2/Groups/:id', async (req, res) => {
+    const token = await scimContext(req, res);
+    if (!token) return;
+    const group = isUuid(req.params.id) ? await getScimGroup(token.orgId, req.params.id) : null;
+    if (!group) return scimError(res, 404, 'group not found');
+    res.json(await scimGroupView(group));
+  });
+
+  app.post('/scim/v2/Groups', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    const b = (req.body || {}) as any;
+    const displayName = sanitizeName(b.displayName, 200);
+    if (!displayName) return scimError(res, 400, 'displayName required', 'invalidValue');
+    const existing = (await listScimGroups(token.orgId)).find((g) => g.display_name.toLowerCase() === displayName.toLowerCase());
+    if (existing) return scimError(res, 409, 'group already exists', 'uniqueness');
+    const accounts = await listAccounts(token.orgId);
+    const accountId = b.accountId ? String(b.accountId) : accounts[0]?.id || null;
+    if (accountId && !accounts.some((a) => a.id === accountId)) return scimError(res, 400, 'accountId is outside the tenant', 'invalidValue');
+    const roles = Array.isArray(b.roles) ? b.roles.map(String).slice(0, 20) : [];
+    if (roles.length) {
+      const available = accountId ? await listRoles(accountId) : [];
+      const unknown = roles.filter((slug: string) => !available.some((r) => r.slug === slug));
+      if (unknown.length) return scimError(res, 400, `unknown roles: ${unknown.join(', ')}`, 'invalidValue');
+    }
+    const members = Array.isArray(b.members) ? b.members.map((m: any) => String(m?.value || m)).filter(Boolean).slice(0, 5000) : [];
+    const group = await createScimGroup(token.orgId, {
+      displayName, accountId, externalId: b.externalId ? String(b.externalId).slice(0, 256) : null, members, roles,
+    });
+    await applyGroupRoles(token.orgId, group, members);
+    await auditMutation(req, 'iam:scim:group:create', `group:${group.id}`, { org: token.orgId, tokenId: token.id, roles });
+    res.status(201).setHeader('location', `/scim/v2/Groups/${group.id}`);
+    res.json(await scimGroupView(group));
+  });
+
+  app.patch('/scim/v2/Groups/:id', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    const group = isUuid(req.params.id) ? await getScimGroup(token.orgId, req.params.id) : null;
+    if (!group) return scimError(res, 404, 'group not found');
+    const ops = (req.body || {}).Operations;
+    if (!Array.isArray(ops) || !ops.length) return scimError(res, 400, 'Operations[] required', 'invalidSyntax');
+    let members = [...group.members];
+    let displayName = group.display_name;
+    let roles = [...group.roles];
+    for (const op of ops.slice(0, 50)) {
+      const verb = String(op?.op || '').toLowerCase();
+      const path = String(op?.path || '').toLowerCase();
+      const values = Array.isArray(op?.value) ? op.value.map((v: any) => String(v?.value || v)).filter(Boolean) : [];
+      if (path === 'members' && (verb === 'add' || verb === 'replace')) {
+        if (verb === 'replace') members = values;
+        else for (const id of values) if (!members.includes(id)) members.push(id);
+      } else if (path === 'members' && verb === 'remove') {
+        const target = op?.value ? String(op.value?.value || op.value) : '';
+        members = target ? members.filter((id) => id !== target) : [];
+      } else if (path === 'displayname' && verb === 'replace') {
+        displayName = sanitizeName(op.value, 200);
+      } else if (path === 'roles' && verb === 'replace') {
+        roles = Array.isArray(op.value) ? op.value.map(String).slice(0, 20) : [];
+      } else {
+        return scimError(res, 400, `unsupported patch path '${op?.path || '(none)'}'`, 'invalidPath');
+      }
+    }
+    const before = new Set(group.members);
+    const after = new Set(members);
+    const added = members.filter((id) => !before.has(id));
+    const removed = group.members.filter((id) => !after.has(id));
+    const updated = await updateScimGroup(token.orgId, group.id, { members, displayName, roles });
+    if (!updated) return scimError(res, 404, 'group not found');
+    if (roles.length !== group.roles.length) await revokeGroupRoles(token.orgId, group, group.members);
+    await applyGroupRoles(token.orgId, updated, added);
+    await revokeGroupRoles(token.orgId, group, removed);
+    await auditMutation(req, 'iam:scim:group:patch', `group:${group.id}`, { org: token.orgId, tokenId: token.id, added, removed });
+    res.json(await scimGroupView(updated));
+  });
+
+  app.delete('/scim/v2/Groups/:id', async (req, res) => {
+    const token = await scimContext(req, res, true);
+    if (!token) return;
+    const group = isUuid(req.params.id) ? await getScimGroup(token.orgId, req.params.id) : null;
+    if (!group) return scimError(res, 404, 'group not found');
+    await revokeGroupRoles(token.orgId, group, group.members);
+    await deleteScimGroup(token.orgId, group.id);
+    await auditMutation(req, 'iam:scim:group:delete', `group:${group.id}`, { org: token.orgId, tokenId: token.id });
+    res.status(204).end();
+  });
+
+  // ---- SCIM token lifecycle ----
+  app.post('/v1/scim/tokens', async (req, res) => {
+    const org = await resolveCallerOrg(req, TRUST_STAMPED);
+    if (!org) return res.status(403).json({ error: 'org_required', message: 'SCIM tokens are org-scoped' });
+    const b = (req.body || {}) as any;
+    const scopes = Array.isArray(b.scopes)
+      ? b.scopes.map(String).filter((s: string) => s === 'scim:read' || s === 'scim:write')
+      : ['scim:read', 'scim:write'];
+    if (!scopes.length) return res.status(400).json({ error: 'invalid_scopes' });
+    const created = await createScimToken({
+      orgId: org, description: b.description ? String(b.description).slice(0, 300) : '',
+      scopes, createdBy: await resolveCallerUser(req, TRUST_STAMPED),
+      ttlSeconds: b.ttlSeconds === undefined ? null : Number(b.ttlSeconds),
+    });
+    await auditMutation(req, 'iam:scim:token:create', `scim-token:${created.record.id}`, { org, scopes });
+    res.status(201).json({
+      id: created.record.id, token: created.token, orgId: org, scopes,
+      expiresAt: created.record.expires_at,
+      hint: 'Store this token now; it is never shown again.',
+    });
+  });
+
+  app.get('/v1/scim/tokens', async (req, res) => {
+    const org = await resolveCallerOrg(req, TRUST_STAMPED);
+    if (!org) return res.status(403).json({ error: 'org_required' });
+    res.setHeader('cache-control', 'no-store');
+    res.json({ items: await listScimTokens(org) });
+  });
+
+  app.delete('/v1/scim/tokens/:id', async (req, res) => {
+    const org = await resolveCallerOrg(req, TRUST_STAMPED);
+    if (!org) return res.status(403).json({ error: 'org_required' });
+    if (!isUuid(req.params.id)) return res.status(400).json({ error: 'invalid_id' });
+    const ok = await revokeScimToken(org, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'not_found' });
+    await auditMutation(req, 'iam:scim:token:revoke', `scim-token:${req.params.id}`, { org });
+    res.json({ ok: true });
+  });
+
   app.post('/v1/auth/login', async (req, res) => {
     const schema = z.object({
       email: z.string().trim().toLowerCase().email().max(320),
@@ -761,6 +1114,9 @@ async function auditMutation(req: express.Request, action: string, resource: str
       const user = org ? await findUserByOrgEmail(org.id, email) : null;
       // Constant-ish work for unknown users; never reveal whether the account exists.
       const ok = user ? await verifyPassword(password, user.password_hash) : false;
+      if (user && user.active === false) {
+        return res.status(403).json({ error: 'account_deactivated', message: 'This account has been deactivated by an administrator.' });
+      }
       if (!user || !ok) {
         await logAudit({
           actor_type: 'user', actor_id: user?.id || '', action: 'iam:auth:login', resource: `org:${org?.id || slug}`,
@@ -785,6 +1141,9 @@ async function auditMutation(req: express.Request, action: string, resource: str
     }
     const org = (await getOrgBySlug(slug)) || (await createOrganization(slug, slug));
     const user = await upsertUser(org.id, email, email);
+    if (user.active === false) {
+      return res.status(403).json({ error: 'account_deactivated', message: 'This account has been deactivated by an administrator.' });
+    }
     const session = await issueSession(user);
     noStore(res);
     res.json(session);

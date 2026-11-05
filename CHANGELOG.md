@@ -6,6 +6,19 @@ Format based on Keep a Changelog; versioning follows SemVer.
 ## [Unreleased]
 
 ### Added
+- Durable human tasks / wait-for-signal (`/v1/human-tasks`, `humanTask` node)
+  with claim, complete/reject/expire, SLA deadlines and exactly-once resume.
+- Tenant-scoped full-text, semantic and hybrid search over Base documents
+  (`/v1/search`) with ACL filtering, highlights, facets, cursor pagination and
+  idempotent reindex.
+- Tenant secret vault (`/v1/secrets`) with AES-256-GCM encryption, versioned
+  rotation with grace, revocation, rotation webhook and metadata-only lists.
+- SCIM 2.0 Users/Groups provisioning (`/scim/v2`) with scoped SCIM tokens,
+  filters, deprovisioning (session/API-key revocation) and audited group-role
+  mapping.
+- JS/Python/Go SDK helpers for human tasks, search, secrets and SCIM tokens.
+
+### Added
 - SynapseDX management console is served at the public root `https://synapsedx.sbs/`
   while `/v1/*` and `/health` stay on the Tier-2 gateway; the legacy
   `cloud.synapsedx.sbs` host redirects to the root.

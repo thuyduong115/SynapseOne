@@ -14,7 +14,7 @@ import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { BaseMapping, cloneJson, deepMerge, getPath, setPath } from './mapping';
-import { baseCollections, baseDocuments, baseVectors } from './schema';
+import { baseCollections, baseDocuments, baseVectors, searchIndex } from './schema';
 import { QuerySpec, QueryResult, VectorSearchSpec, VectorSearchResult, applyVectorSearch, formatQueryPage } from './query';
 import { compileQuery } from './pg-query';
 
@@ -56,7 +56,7 @@ let db: NodePgDatabase<typeof import('./schema')> | null = null;
 if (DATABASE_URL) {
   pool = new Pool({ connectionString: DATABASE_URL });
   pool.on('error', (e) => console.error('[base][db] pool error', e.message));
-  db = drizzle(pool, { schema: { baseCollections, baseDocuments, baseVectors } });
+  db = drizzle(pool, { schema: { baseCollections, baseDocuments, baseVectors, searchIndex } });
 }
 
 let ensured = false;
@@ -68,7 +68,7 @@ export async function ensureTables(): Promise<void> {
     try {
       // Hold the advisory lock on the same dedicated session that runs the
       // migration (pool connections are not guaranteed to be reused).
-      const migrationDb = drizzle(client, { schema: { baseCollections, baseDocuments, baseVectors } });
+      const migrationDb = drizzle(client, { schema: { baseCollections, baseDocuments, baseVectors, searchIndex } });
       await migrationDb.execute(sql`select pg_advisory_lock(hashtext('synapseone_base_migrations'))`);
       try {
         await migrate(migrationDb, {

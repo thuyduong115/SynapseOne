@@ -202,6 +202,133 @@ class WorkflowService:
         """Delete a credential."""
         return self._req("DELETE", f"/v1/credentials/{quote(cred_id, safe='')}")
 
+    # ---- durable human tasks (#44) ----
+    def create_human_task(
+        self,
+        title: str,
+        *,
+        description: str = "",
+        assignee: str | None = None,
+        candidate_roles: list[str] | None = None,
+        deadline: str | None = None,
+        decision_schema: dict | None = None,
+        payload: dict | None = None,
+        workflow_id: str | None = None,
+        execution_id: str | None = None,
+        node: str | None = None,
+    ) -> dict:
+        """Create a durable human task (claim/complete/reject/expire)."""
+        body: dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "candidateRoles": candidate_roles or [],
+            "decisionSchema": decision_schema or {},
+            "payload": payload or {},
+        }
+        if assignee:
+            body["assignee"] = assignee
+        if deadline:
+            body["deadline"] = deadline
+        if workflow_id:
+            body["workflowId"] = workflow_id
+        if execution_id:
+            body["executionId"] = execution_id
+        if node:
+            body["node"] = node
+        return self._req("POST", "/v1/human-tasks", body)
+
+    def list_human_tasks(self, status: str | None = None, **filters: Any) -> list:
+        """List tenant-scoped human tasks. Filters: executionId, workflowId, assignee, limit, offset."""
+        params: dict[str, Any] = {k: v for k, v in filters.items() if v is not None}
+        if status:
+            params["status"] = status
+        qs = urlencode(params) if params else ""
+        raw = self._req("GET", f"/v1/human-tasks{('?' + qs) if qs else ''}")
+        return raw.get("items", []) if isinstance(raw, dict) else (raw or [])
+
+    def get_human_task(self, task_id: str) -> dict:
+        return self._req("GET", f"/v1/human-tasks/{quote(task_id, safe='')}")
+
+    def claim_human_task(self, task_id: str) -> dict:
+        return self._req("POST", f"/v1/human-tasks/{quote(task_id, safe='')}/claim", {})
+
+    def complete_human_task(
+        self, task_id: str, decision: dict | None = None, note: str | None = None
+    ) -> dict:
+        body: dict[str, Any] = {"decision": decision or {}}
+        if note:
+            body["note"] = note
+        return self._req(
+            "POST", f"/v1/human-tasks/{quote(task_id, safe='')}/complete", body
+        )
+
+    def reject_human_task(
+        self, task_id: str, note: str, decision: dict | None = None
+    ) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/human-tasks/{quote(task_id, safe='')}/reject",
+            {"note": note, "decision": decision or {}},
+        )
+
+    def expire_human_task(self, task_id: str, force: bool = False) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/human-tasks/{quote(task_id, safe='')}/expire",
+            {"force": force},
+        )
+
+    # ---- tenant secret vault (#47) ----
+    def create_secret(
+        self,
+        name: str,
+        value: str,
+        *,
+        description: str = "",
+        scope: str = "tenant",
+        account_id: str | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "description": description,
+            "scope": scope,
+        }
+        if account_id:
+            body["accountId"] = account_id
+        return self._req("POST", "/v1/secrets", body)
+
+    def list_secrets(self) -> list:
+        raw = self._req("GET", "/v1/secrets")
+        return raw.get("items", []) if isinstance(raw, dict) else (raw or [])
+
+    def get_secret(self, name: str) -> dict:
+        return self._req("GET", f"/v1/secrets/{quote(name, safe='')}")
+
+    def read_secret(self, name: str, version: int | None = None) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/secrets/{quote(name, safe='')}/read",
+            {"version": version} if version else {},
+        )
+
+    def rotate_secret(self, name: str, value: str, grace_seconds: int = 86400) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/secrets/{quote(name, safe='')}/rotate",
+            {"value": value, "graceSeconds": grace_seconds},
+        )
+
+    def revoke_secret(self, name: str, version: int | None = None) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/secrets/{quote(name, safe='')}/revoke",
+            {"version": version} if version else {},
+        )
+
+    def delete_secret(self, name: str) -> dict:
+        return self._req("DELETE", f"/v1/secrets/{quote(name, safe='')}")
+
     def trigger_webhook(
         self,
         path: str,

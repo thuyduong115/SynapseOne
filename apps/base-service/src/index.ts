@@ -29,6 +29,7 @@ import {
 } from './mapping';
 import { parseQuerySpec, applyQuery, parseVectorSearchSpec, QueryError } from './query';
 import { auditMiddleware } from './audit';
+import { searchRecords, indexStatus, replaceCollectionIndex, upsertDocumentIndex, removeDocumentIndex, dropCollectionIndex } from './search';
 
 dotenv.config();
 const PORT = Number(process.env.PORT || 4005);
@@ -296,6 +297,79 @@ export function createApp(): express.Express {
       ));
   }
 
+  // ---------- tenant-scoped search over Base documents (#46) ----------
+  function searchScope(req: express.Request) {
+    const caller = resolveCaller(req);
+    if (caller.kind === 'anon') return null;
+    return {
+      platform: caller.kind === 'platform',
+      orgId: caller.principal?.org || null,
+      accountId: caller.principal?.account || null,
+      subject: caller.principal?.sub || null,
+    };
+  }
+
+  app.post('/v1/search', async (req, res) => {
+    const scope = searchScope(req);
+    if (!scope) return res.status(401).json({ error: 'auth_required', message: 'search requires an authenticated caller' });
+    const b = (req.body || {}) as any;
+    const query = String(b.query ?? b.q ?? '').slice(0, 2000);
+    const mode = ['fulltext', 'semantic', 'hybrid'].includes(String(b.mode)) ? b.mode : 'fulltext';
+    try {
+      const result = await searchRecords(scope, query, {
+        mode,
+        collection: b.collection ? String(b.collection) : undefined,
+        collections: Array.isArray(b.collections) ? b.collections.map(String).slice(0, 50) : undefined,
+        limit: Number(b.limit) || 20,
+        cursor: b.cursor ? String(b.cursor) : null,
+        filters: b.filters && typeof b.filters === 'object' ? b.filters : {},
+      });
+      res.setHeader('cache-control', 'no-store');
+      res.json(result);
+    } catch (e: any) {
+      res.status(400).json({ error: 'search_failed', message: String(e?.message || e).slice(0, 300) });
+    }
+  });
+
+  app.get('/v1/search', async (req, res) => {
+    const scope = searchScope(req);
+    if (!scope) return res.status(401).json({ error: 'auth_required' });
+    const q = req.query as any;
+    const result = await searchRecords(scope, String(q.q ?? q.query ?? ''), {
+      mode: ['fulltext', 'semantic', 'hybrid'].includes(String(q.mode)) ? q.mode : 'fulltext',
+      collection: q.collection ? String(q.collection) : undefined,
+      limit: Number(q.limit) || 20,
+      cursor: q.cursor ? String(q.cursor) : null,
+    });
+    res.setHeader('cache-control', 'no-store');
+    res.json(result);
+  });
+
+  app.post('/v1/search/reindex', async (req, res) => {
+    const scope = searchScope(req);
+    if (!scope) return res.status(401).json({ error: 'auth_required' });
+    const caller = resolveCaller(req);
+    const b = (req.body || {}) as any;
+    const wanted = Array.isArray(b.collections) ? new Set(b.collections.map(String)) : null;
+    let collections = (await listCollectionRecs()).filter((c) => canAccessCollection(c, caller));
+    if (wanted) collections = collections.filter((c) => wanted.has(c.name) || wanted.has(c.id));
+    let indexed = 0;
+    const details: Array<{ collection: string; indexed: number }> = [];
+    for (const collection of collections) {
+      const docs = await listAllDocumentRecs(collection.id, { max: Math.min(Math.max(Number(b.maxPerCollection) || 50_000, 1), 200_000) });
+      indexed += await replaceCollectionIndex(collection, docs);
+      details.push({ collection: collection.name, indexed: docs.length });
+    }
+    res.json({ ok: true, indexed, collections: details, status: await indexStatus(scope) });
+  });
+
+  app.get('/v1/search/status', async (req, res) => {
+    const scope = searchScope(req);
+    if (!scope) return res.status(401).json({ error: 'auth_required' });
+    res.setHeader('cache-control', 'no-store');
+    res.json({ ok: true, ...(await indexStatus(scope)) });
+  });
+
   app.get('/health', async (_req, res) => {
     let collections = 0;
     try { collections = (await listCollectionRecs()).length; } catch { /* health never fails on db */ }
@@ -470,6 +544,7 @@ export function createApp(): express.Express {
     }
     try {
       const doc = await createDocumentRec(loaded.collection.id, id, data);
+      await upsertDocumentIndex(loaded.collection, doc).catch(() => undefined);
       res.status(201).json({ ...toApiDocument(doc, 'data', loaded.collection.mapping), collection: loaded.collection.name });
     } catch (e: any) {
       if (e instanceof StoreError && e.code === 'conflict') return res.status(409).json({ error: 'document_exists', message: e.message });
@@ -512,6 +587,7 @@ export function createApp(): express.Express {
     }
     try {
       const out = await setDocumentRec(loaded.collection.id, id, data, { merge, ifVersion });
+      await upsertDocumentIndex(loaded.collection, out.doc).catch(() => undefined);
       res.status(out.created ? 201 : 200).json({ ...toApiDocument(out.doc, 'data', loaded.collection.mapping), collection: loaded.collection.name });
     } catch (e: any) {
       if (e instanceof StoreError && e.code === 'version_conflict') return res.status(409).json({ error: 'version_conflict', message: e.message });
@@ -562,6 +638,7 @@ export function createApp(): express.Express {
       throw e;
     }
     const out = await setDocumentRec(loaded.collection.id, id, next, { merge: false, ifVersion: cur.version });
+    await upsertDocumentIndex(loaded.collection, out.doc).catch(() => undefined);
     res.json({ ...toApiDocument(out.doc, 'data', loaded.collection.mapping), collection: loaded.collection.name });
   });
 
@@ -584,6 +661,7 @@ export function createApp(): express.Express {
     try {
       const ok = await deleteDocumentRec(loaded.collection.id, id, { ifVersion });
       if (!ok) return res.status(404).json({ error: 'not_found', message: `document '${id}' not found` });
+      await removeDocumentIndex(loaded.collection.id, id).catch(() => undefined);
       res.json({ ok: true, id, collection: loaded.collection.name });
     } catch (e: any) {
       if (e instanceof StoreError && e.code === 'version_conflict') return res.status(409).json({ error: 'version_conflict', message: e.message });
@@ -681,17 +759,20 @@ export function createApp(): express.Express {
           if (!id) throw new StoreError('invalid', 'invalid document id');
           const data = parseDataBody(op, loaded.collection.mapping);
           const doc = await createDocumentRec(loaded.collection.id, id, data);
+          await upsertDocumentIndex(loaded.collection, doc).catch(() => undefined);
           results.push({ index: i, ok: true, op: 'create', document: toApiDocument(doc, 'data', loaded.collection.mapping) });
         } else if (op.op === 'set' || op.op === 'update') {
           const id = cleanDocId(op.id);
           if (!id) throw new StoreError('invalid', 'id is required');
           const data = parseDataBody(op, loaded.collection.mapping, { partial: op.op === 'update' });
           const out = await setDocumentRec(loaded.collection.id, id, data, { merge: op.op === 'update' });
+          await upsertDocumentIndex(loaded.collection, out.doc).catch(() => undefined);
           results.push({ index: i, ok: true, op: op.op, created: out.created, document: toApiDocument(out.doc, 'data', loaded.collection.mapping) });
         } else if (op.op === 'delete') {
           const id = cleanDocId(op.id);
           if (!id) throw new StoreError('invalid', 'id is required');
           const ok = await deleteDocumentRec(loaded.collection.id, id, { ifVersion: op.ifVersion === undefined ? undefined : Number(op.ifVersion) });
+          if (ok) await removeDocumentIndex(loaded.collection.id, id).catch(() => undefined);
           results.push({ index: i, ok, op: 'delete', id });
         } else if (op.op === 'increment') {
           const id = cleanDocId(op.id);
