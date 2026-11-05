@@ -34,6 +34,7 @@ import { InferenceService } from './inference';
 import { AiService } from './ai';
 import { HealthService } from './health';
 import { StorageService } from './storage';
+import { SearchService } from './search';
 import { OcsService } from './ocs';
 import { NotificationsService } from './notifications';
 
@@ -49,6 +50,7 @@ export * from './stream';
 export * from './inference';
 export * from './health';
 export * from './storage';
+export * from './search';
 export * from './ocs';
 export * from './notifications';
 
@@ -80,6 +82,8 @@ export class SynapseOneClient {
   readonly stream: StreamService;
   readonly inference: InferenceService;
   readonly storage: StorageService;
+  /** Tenant-scoped search over Base documents (#46). */
+  readonly search: SearchService;
   /** SynapseOCS bucket/object API; `storage` remains the default-bucket alias. */
   readonly ocs: OcsService;
   readonly notifications: NotificationsService;
@@ -98,6 +102,7 @@ export class SynapseOneClient {
     this.stream = new StreamService(this.http);
     this.inference = new InferenceService(this.http);
     this.storage = new StorageService(this.http);
+    this.search = new SearchService(this.http);
     this.ocs = new OcsService(this.http);
     this.notifications = new NotificationsService(this.http);
     this.health = new HealthService(this.http);

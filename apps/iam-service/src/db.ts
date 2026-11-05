@@ -17,7 +17,7 @@ import * as schema from './schema';
 
 export interface Organization { id: string; slug: string; display_name: string; created_at?: string }
 export interface Account { id: string; org_id: string; slug: string; display_name: string }
-export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string; password_hash?: string; email_verified?: boolean }
+export interface User { id: string; org_id: string; email: string; display_name?: string; external_sub?: string; password_hash?: string; email_verified?: boolean; active?: boolean }
 export interface Role { id: string; account_id: string; slug: string; description?: string }
 export interface PolicyDoc { Version?: string; Statement: Array<{ Effect: 'Allow'|'Deny'; Action: string|string[]; Resource: string|string[]; Condition?: any }> }
 export interface Policy { id: string; account_id: string; slug: string; description?: string; document: PolicyDoc }
@@ -112,7 +112,7 @@ function orgRow(r: { id: string; slug: string; displayName: string; createdAt?: 
 function accountRow(r: { id: string; orgId: string; slug: string; displayName: string }): Account {
   return { id: r.id, org_id: r.orgId, slug: r.slug, display_name: r.displayName };
 }
-function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null; passwordHash?: string | null; emailVerified?: boolean | null }): User {
+function userRow(r: { id: string; orgId: string; email: string; displayName: string | null; externalSub: string | null; passwordHash?: string | null; emailVerified?: boolean | null; active?: boolean | null }): User {
   return {
     id: r.id,
     org_id: r.orgId,
@@ -121,6 +121,7 @@ function userRow(r: { id: string; orgId: string; email: string; displayName: str
     external_sub: r.externalSub ?? undefined,
     password_hash: r.passwordHash ?? undefined,
     email_verified: !!r.emailVerified,
+    active: r.active !== false,
   };
 }
 function roleRow(r: { id: string; accountId: string; slug: string; description: string | null }): Role {
@@ -261,6 +262,7 @@ export async function upsertUser(orgId: string, email: string, displayName?: str
         email: schema.users.email,
         displayName: schema.users.displayName,
         externalSub: schema.users.externalSub,
+        active: schema.users.active,
       });
     return userRow(rows[0]);
   }
@@ -421,6 +423,7 @@ export async function listUsers(orgId: string): Promise<User[]> {
       email: schema.users.email,
       displayName: schema.users.displayName,
       externalSub: schema.users.externalSub,
+      active: schema.users.active,
     }).from(schema.users).where(eq(schema.users.orgId, orgId)).orderBy(asc(schema.users.email));
     return rows.map(userRow);
   }
@@ -438,6 +441,7 @@ export async function getUserById(id: string): Promise<User | null> {
       externalSub: schema.users.externalSub,
       passwordHash: schema.users.passwordHash,
       emailVerified: schema.users.emailVerified,
+      active: schema.users.active,
     }).from(schema.users).where(eq(schema.users.id, id)).limit(1);
     return rows[0] ? userRow(rows[0]) : null;
   }
@@ -457,6 +461,7 @@ export async function findUserByOrgEmail(orgId: string, email: string): Promise<
       externalSub: schema.users.externalSub,
       passwordHash: schema.users.passwordHash,
       emailVerified: schema.users.emailVerified,
+      active: schema.users.active,
     }).from(schema.users).where(and(
       eq(schema.users.orgId, orgId),
       eq(schema.users.email, email),
@@ -801,6 +806,34 @@ export async function setUserPassword(userId: string, hash: string): Promise<boo
   const u = mem.users.get(userId);
   if (!u) return false;
   u.password_hash = hash;
+  return true;
+}
+
+export async function updateUserProfile(userId: string, patch: { displayName?: string; externalSub?: string | null }): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.update(schema.users).set({
+      ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+      ...(patch.externalSub !== undefined ? { externalSub: patch.externalSub } : {}),
+    }).where(eq(schema.users.id, userId)).returning({ id: schema.users.id });
+    return rows.length > 0;
+  }
+  const user = mem.users.get(userId);
+  if (!user) return false;
+  if (patch.displayName !== undefined) user.display_name = patch.displayName;
+  if (patch.externalSub !== undefined) user.external_sub = patch.externalSub || undefined;
+  return true;
+}
+
+export async function setUserActive(userId: string, active: boolean): Promise<boolean> {
+  if (db) {
+    await ensureTables();
+    const rows = await db.update(schema.users).set({ active }).where(eq(schema.users.id, userId)).returning({ id: schema.users.id });
+    return rows.length > 0;
+  }
+  const user = mem.users.get(userId);
+  if (!user) return false;
+  user.active = active;
   return true;
 }
 

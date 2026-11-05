@@ -22,9 +22,13 @@ import {
   listActiveCronWorkflows, ensureTables, useDb, StoredWorkflow, StoredCredential,
   createCredentialRec, getCredentialRec, listCredentialRecs, deleteCredentialRec, rotateCredentialRec,
   toPublicCredential, decryptSecret,
+  createHumanTaskRec, getHumanTaskRec, listHumanTaskRecs, transitionHumanTaskRec, toPublicHumanTask,
+  claimExecutionResume, finishExecutionRec,
+  createSecretRec, listSecretRecs, findSecretRec, readSecretValue, rotateSecretRec,
+  listSecretVersionRecs, revokeSecretRec, deleteSecretRec, toPublicSecret, toPublicSecretVersion,
 } from './store';
 import type { Principal } from './store';
-import { runWorkflow, detectCycle, workflowCronIntervalMs, workflowCronNextRunAt, validateCronParams, validateSynapseOneParams, validateIntegrationParams, validateAgentToolIds, extractEmbeddingVector, isBlockedUrl as engineIsBlockedUrl, isAllowedSelfUrl, selfAllowlist, actorFor, isWebhookType, isCronType, isTriggerType, isCodeType, isHttpRequestType, isIfType, isSetType, isNoOpType, isAiAgentType, isDecisionType, isModelType, isIntegrationType, normalizeNodeType, edgeTargetPort, auxiliaryEdges } from './engine';
+import { runWorkflow, HumanTaskPause, detectCycle, workflowCronIntervalMs, workflowCronNextRunAt, validateCronParams, validateSynapseOneParams, validateIntegrationParams, validateAgentToolIds, extractEmbeddingVector, isBlockedUrl as engineIsBlockedUrl, isAllowedSelfUrl, selfAllowlist, actorFor, isWebhookType, isCronType, isTriggerType, isCodeType, isHttpRequestType, isIfType, isSetType, isNoOpType, isAiAgentType, isDecisionType, isModelType, isIntegrationType, normalizeNodeType, edgeTargetPort, auxiliaryEdges } from './engine';
 import type { CredentialResolver, RunPrincipal, SynapseOneCall, EngineNode, Connections } from './engine';
 
 /** May this credential be resolved for this run principal? (P0-4/#5)
@@ -76,6 +80,30 @@ function executionScope(p: Principal | null | undefined): { orgId?: string; acco
   if (p.org) return { orgId: p.org };
   if (p.account) return { accountId: p.account };
   return null;
+}
+
+/** Human-task tenant guard (#44). */
+function canAccessHumanTask(t: { org_id?: string | null; account_id?: string | null }, p: Principal | null | undefined): boolean {
+  if (!p) return true;
+  if (p.account && t.account_id === p.account) return true;
+  if (p.org && t.org_id === p.org) return true;
+  return false;
+}
+
+function humanTaskScope(p: Principal | null | undefined): { orgId?: string; accountId?: string } | null {
+  if (!p) return {};
+  if (p.org) return { orgId: p.org };
+  if (p.account) return { accountId: p.account };
+  return null;
+}
+
+/** May this principal act on the task? Assignee-bound tasks require the
+ *  assignee; unassigned tasks are open to the owning tenant (candidate roles
+ *  are policy hints surfaced to the caller). */
+function canActOnHumanTask(t: { assignee?: string | null; claimed_by?: string | null }, p: Principal | null | undefined): boolean {
+  if (!p) return true;
+  if (t.assignee) return t.assignee === p.sub || t.claimed_by === p.sub;
+  return true;
 }
 
 /** May this execution record be read by this principal? Same tenant rules as
@@ -1291,6 +1319,9 @@ export function createApp(): express.Express {
     console.warn('[workflow][security] SYNAPSEONE_INTERNAL_SECRET not set — service-to-service auth disabled (dev default). Set it in production.');
   }
   app.use('/v1/' as any, ((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // External rotation scheduler: authenticated by its own shared token in
+    // the handler, never by the gateway-only internal credential.
+    if (req.path === '/v1/secrets/rotation-webhook' || req.path === '/secrets/rotation-webhook') return next();
     if (!INTERNAL_SECRET) {
       if (IS_PROD_WF) return res.status(500).json({ error: 'misconfigured', message: 'internal secret required in production' });
       return next();
@@ -1581,19 +1612,42 @@ function tenantBinding(
     if (!wf || !canAccessWorkflow(wf, principal)) return res.status(404).json({ error: 'not_found', message: 'workflow not found' });
     const input = (req.body && typeof req.body === 'object' ? req.body : { value: req.body }) || {};
     const startedAt = new Date().toISOString();
+    const executionId = randomUUID();
     const r = await runWorkflow(
       { nodes: wf.nodes as any, connections: wf.connections as any, name: wf.name, settings: wf.settings as any },
       input,
-      { triggeredBy: 'manual', principal, credentialResolver: makeCredentialResolver(principal), synapseoneCall },
+      {
+        triggeredBy: 'manual', principal, credentialResolver: makeCredentialResolver(principal), synapseoneCall,
+        humanTask: {
+          create: async (task) => {
+            const rec = await createHumanTaskRec({
+              id: randomUUID(), execution_id: executionId, workflow_id: wf.id, node_name: task.node,
+              title: task.title, description: task.description, assignee: task.assignee,
+              candidate_roles: task.candidateRoles, decision_schema: task.decisionSchema,
+              payload: task.payload, deadline: task.deadline,
+              org_id: principal?.org || wf.org_id || null,
+              account_id: principal?.account || wf.account_id || null,
+            });
+            return toPublicHumanTask(rec);
+          },
+        },
+      },
     );
     const finishedAt = new Date().toISOString();
     recordRun('manual', r.status, r.nodeRuns);
     const exec = await createExecutionRec({
+      id: executionId,
       workflow_id: wf.id, workflow_name: wf.name, status: r.status,
       input, output: r.output, node_runs: r.nodeRuns as any,
       error: (r as any).error ?? null, triggered_by: 'manual',
       principal, actor: actorFor(wf.id, principal), startedAt, finishedAt,
     });
+    if (r.status === 'paused') {
+      return res.status(202).json({
+        ok: true, paused: true, status: 'paused', output: r.output,
+        executionId: exec.id, taskId: r.pause?.task?.id, task: r.pause?.task,
+      });
+    }
     res.status(r.status === 'success' ? 200 : 500).json({
       ok: r.status === 'success',
       output: r.output,
@@ -1865,6 +1919,287 @@ function tenantBinding(
     if (!access.ok) return res.status(access.status!).json({ error: access.error, message: access.message });
     await deleteCredentialRec(id);
     res.json({ ok: true, id });
+  });
+
+  // ---------- durable human tasks (#44) ----------
+  app.post('/v1/human-tasks', async (req, res) => {
+    const principal = principalFromHeaders(req);
+    if (!principal) return res.status(401).json({ error: 'unauthenticated', message: 'a verified principal is required' });
+    const b = (req.body || {}) as any;
+    const title = String(b.title || '').trim();
+    if (!title || title.length > 300) return res.status(400).json({ error: 'invalid_title', message: 'title is required (≤300 chars)' });
+    const deadline = b.deadline ? new Date(String(b.deadline)) : null;
+    if (deadline && Number.isNaN(deadline.getTime())) return res.status(400).json({ error: 'invalid_deadline' });
+    const task = await createHumanTaskRec({
+      execution_id: b.executionId ? String(b.executionId) : null,
+      workflow_id: b.workflowId ? String(b.workflowId) : null,
+      node_name: b.node ? String(b.node) : 'manual',
+      title,
+      description: String(b.description || '').slice(0, 4000),
+      assignee: b.assignee ? String(b.assignee).slice(0, 128) : null,
+      candidate_roles: Array.isArray(b.candidateRoles) ? b.candidateRoles.map(String).slice(0, 20) : [],
+      decision_schema: b.decisionSchema && typeof b.decisionSchema === 'object' ? b.decisionSchema : {},
+      payload: b.payload && typeof b.payload === 'object' ? b.payload : {},
+      deadline: deadline ? deadline.toISOString() : null,
+      org_id: principal.org || null,
+      account_id: principal.account || null,
+    });
+    res.status(201).json({ task: toPublicHumanTask(task) });
+  });
+
+  app.get('/v1/human-tasks', async (req, res) => {
+    const principal = principalFromHeaders(req);
+    const scope = humanTaskScope(principal);
+    if (scope === null) return res.status(403).json({ error: 'tenant_required' });
+    const q = req.query as any;
+    const items = await listHumanTaskRecs({
+      status: q.status ? String(q.status) : undefined,
+      executionId: q.executionId ? String(q.executionId) : undefined,
+      workflowId: q.workflowId ? String(q.workflowId) : undefined,
+      assignee: q.assignee ? String(q.assignee) : undefined,
+      ...scope,
+      limit: Number(q.limit) || 50,
+      offset: Number(q.offset) || 0,
+    });
+    res.json({ items: items.map(toPublicHumanTask), total: items.length });
+  });
+
+  app.get('/v1/human-tasks/:id', async (req, res) => {
+    const task = await getHumanTaskRec(String(req.params.id || ''));
+    const principal = principalFromHeaders(req);
+    if (!task || !canAccessHumanTask(task, principal)) return res.status(404).json({ error: 'not_found' });
+    res.json({ task: toPublicHumanTask(task) });
+  });
+
+  app.post('/v1/human-tasks/:id/claim', async (req, res) => {
+    const principal = principalFromHeaders(req);
+    if (!principal) return res.status(401).json({ error: 'unauthenticated' });
+    const task = await getHumanTaskRec(String(req.params.id || ''));
+    if (!task || !canAccessHumanTask(task, principal)) return res.status(404).json({ error: 'not_found' });
+    if (!canActOnHumanTask(task, principal)) return res.status(403).json({ error: 'not_assignee' });
+    if (task.status !== 'pending' && task.status !== 'claimed') return res.status(409).json({ error: 'task_not_claimable', status: task.status });
+    const updated = await transitionHumanTaskRec(task.id, ['pending', 'claimed'], {
+      status: 'claimed', claimed_by: principal.sub, claimed_at: new Date().toISOString(),
+    });
+    if (!updated) return res.status(409).json({ error: 'claim_conflict' });
+    res.json({ task: toPublicHumanTask(updated) });
+  });
+
+  async function decideHumanTask(req: any, res: any, decision: 'approve' | 'reject') {
+    const principal = principalFromHeaders(req);
+    if (!principal) return res.status(401).json({ error: 'unauthenticated' });
+    const task = await getHumanTaskRec(String(req.params.id || ''));
+    if (!task || !canAccessHumanTask(task, principal)) return res.status(404).json({ error: 'not_found' });
+    if (!canActOnHumanTask(task, principal)) return res.status(403).json({ error: 'not_assignee' });
+    if (task.status === 'completed' || task.status === 'rejected') return res.status(409).json({ error: 'already_decided', status: task.status });
+    if (task.status === 'expired' || task.status === 'cancelled') return res.status(409).json({ error: 'task_closed', status: task.status });
+    if (task.deadline && new Date(task.deadline).getTime() < Date.now()) {
+      await transitionHumanTaskRec(task.id, ['pending', 'claimed'], {
+        status: 'expired', escalated_at: new Date().toISOString(),
+      });
+      return res.status(409).json({ error: 'task_expired' });
+    }
+    const b = (req.body || {}) as any;
+    const note = b.note === undefined ? null : String(b.note).slice(0, 2000);
+    if (decision === 'reject' && (!note || note.trim().length < 3)) {
+      return res.status(400).json({ error: 'note_required', message: 'a rejection note is required' });
+    }
+    const payload = b.decision && typeof b.decision === 'object' ? b.decision : {};
+    const nextStatus = decision === 'approve' ? 'completed' : 'rejected';
+    const updated = await transitionHumanTaskRec(task.id, ['pending', 'claimed'], {
+      status: nextStatus,
+      completed_by: principal.sub,
+      completed_at: new Date().toISOString(),
+      decision: { ...payload, approved: decision === 'approve' },
+      note,
+    });
+    if (!updated) return res.status(409).json({ error: 'decision_conflict' });
+    let resumed = null;
+    if (updated.execution_id) {
+      const exec = await getExecutionRec(updated.execution_id);
+      const wf = updated.workflow_id ? await getWorkflowRec(updated.workflow_id) : null;
+      if (exec && exec.status === 'paused' && wf && canAccessWorkflow(wf, exec.principal || principal)) {
+        const won = await claimExecutionResume(exec.id);
+        if (won) {
+          const output = { humanTask: { id: updated.id, status: updated.status, decision: updated.decision, note: updated.note }, ...(updated.decision || {}) };
+          const r = await runWorkflow(
+            { nodes: wf.nodes as any, connections: wf.connections as any, name: wf.name, settings: wf.settings as any },
+            exec.input,
+            {
+              triggeredBy: 'human-task', principal: exec.principal || principal,
+              credentialResolver: makeCredentialResolver(exec.principal || principal), synapseoneCall,
+              resumeFrom: { node: updated.node_name, output },
+            },
+          );
+          const finishedAt = new Date().toISOString();
+          const mergedRuns = [...(exec.node_runs || []), ...(r.nodeRuns || [])];
+          const finished = await finishExecutionRec(exec.id, {
+            status: r.status === 'error' ? 'error' : 'success',
+            output: r.output, node_runs: mergedRuns as any,
+            error: (r as any).error ?? null, finishedAt,
+          });
+          recordRun('human-task', r.status, r.nodeRuns);
+          resumed = { executionId: exec.id, status: r.status, output: r.output, execution: finished ? toApiExecution(finished, true) : null };
+        } else {
+          resumed = { executionId: exec.id, status: 'already_resumed' };
+        }
+      }
+    }
+    res.json({ task: toPublicHumanTask(updated), resumed });
+  }
+
+  app.post('/v1/human-tasks/:id/complete', (req, res) => decideHumanTask(req, res, 'approve'));
+  app.post('/v1/human-tasks/:id/reject', (req, res) => decideHumanTask(req, res, 'reject'));
+
+  app.post('/v1/human-tasks/:id/expire', async (req, res) => {
+    const principal = principalFromHeaders(req);
+    const task = await getHumanTaskRec(String(req.params.id || ''));
+    if (!task || !canAccessHumanTask(task, principal)) return res.status(404).json({ error: 'not_found' });
+    if (task.status === 'completed' || task.status === 'rejected' || task.status === 'expired' || task.status === 'cancelled') {
+      return res.status(409).json({ error: 'task_closed', status: task.status });
+    }
+    const force = (req.body || {}).force === true;
+    if (!force && (!task.deadline || new Date(task.deadline).getTime() > Date.now())) {
+      return res.status(409).json({ error: 'deadline_not_reached' });
+    }
+    const updated = await transitionHumanTaskRec(task.id, ['pending', 'claimed'], {
+      status: 'expired', escalated_at: new Date().toISOString(),
+    });
+    if (!updated) return res.status(409).json({ error: 'expire_conflict' });
+    res.json({ task: toPublicHumanTask(updated) });
+  });
+
+  // ---------- tenant secret vault (#47) ----------
+  const SECRET_NAME_RE = /^[A-Za-z][A-Za-z0-9_.-]{1,127}$/;
+
+  function secretOrg(req: any, res: any): { org: string; account: string | null; sub: string } | null {
+    const principal = principalFromHeaders(req);
+    if (!principal) { res.status(401).json({ error: 'unauthenticated' }); return null; }
+    if (!principal.org) { res.status(400).json({ error: 'org_required', message: 'the caller credential has no organization claim' }); return null; }
+    return { org: principal.org, account: principal.account || null, sub: principal.sub };
+  }
+
+  async function scopedSecret(req: any, res: any, scope: { org: string; account: string | null }) {
+    const name = String(req.params.name || '');
+    if (!SECRET_NAME_RE.test(name)) { res.status(400).json({ error: 'invalid_name' }); return null; }
+    const secret = await findSecretRec(scope.org, name);
+    if (!secret || (secret.account_id && scope.account && secret.account_id !== scope.account)) {
+      res.status(404).json({ error: 'not_found' }); return null;
+    }
+    if (secret.account_id && !scope.account) { res.status(404).json({ error: 'not_found' }); return null; }
+    return secret;
+  }
+
+  app.post('/v1/secrets', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const b = (req.body || {}) as any;
+    const name = String(b.name || '').trim();
+    if (!SECRET_NAME_RE.test(name)) return res.status(400).json({ error: 'invalid_name', message: 'name must be 2..128 chars [A-Za-z0-9_.-]' });
+    if (typeof b.value !== 'string' || b.value.length < 1 || Buffer.byteLength(b.value, 'utf8') > 65536) {
+      return res.status(400).json({ error: 'invalid_value', message: 'value must be a 1..64KiB string' });
+    }
+    const account = b.accountId && !scope.account ? String(b.accountId).slice(0, 128) : scope.account;
+    try {
+      const secret = await createSecretRec({
+        org_id: scope.org, account_id: account, name,
+        description: b.description === undefined ? '' : String(b.description).slice(0, 500),
+        scope: ['tenant', 'account', 'workflow'].includes(String(b.scope)) ? String(b.scope) : 'tenant',
+        value: b.value, created_by: scope.sub,
+      });
+      res.status(201).json({ secret: toPublicSecret(secret) });
+    } catch (e: any) {
+      if (String(e?.code) === 'conflict' || String(e?.code) === '23505') return res.status(409).json({ error: 'secret_exists' });
+      throw e;
+    }
+  });
+
+  app.get('/v1/secrets', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const rows = await listSecretRecs(scope.org, scope.account || undefined);
+    res.setHeader('cache-control', 'no-store');
+    res.json({ items: rows.map(toPublicSecret), total: rows.length });
+  });
+
+  app.get('/v1/secrets/:name', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const secret = await scopedSecret(req, res, scope);
+    if (!secret) return;
+    const versions = await listSecretVersionRecs(secret);
+    res.setHeader('cache-control', 'no-store');
+    res.json({ secret: toPublicSecret(secret), versions: versions.map(toPublicSecretVersion) });
+  });
+
+  app.post('/v1/secrets/:name/read', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const secret = await scopedSecret(req, res, scope);
+    if (!secret) return;
+    const version = (req.body || {}).version === undefined ? undefined : Number((req.body || {}).version);
+    if (version !== undefined && (!Number.isInteger(version) || version < 1)) return res.status(400).json({ error: 'invalid_version' });
+    const result = await readSecretValue(secret, version);
+    if ('error' in result) {
+      return res.status(result.error === 'not_found' ? 404 : 410).json({ error: result.error === 'expired' ? 'version_expired' : result.error === 'revoked' ? 'version_revoked' : 'not_found' });
+    }
+    res.setHeader('cache-control', 'no-store');
+    res.json({ name: secret.name, version: result.version, value: result.value });
+  });
+
+  app.post('/v1/secrets/:name/rotate', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const secret = await scopedSecret(req, res, scope);
+    if (!secret) return;
+    const b = (req.body || {}) as any;
+    if (typeof b.value !== 'string' || b.value.length < 1 || Buffer.byteLength(b.value, 'utf8') > 65536) {
+      return res.status(400).json({ error: 'invalid_value' });
+    }
+    const grace = b.graceSeconds === undefined ? 86400 : Math.min(Math.max(Number(b.graceSeconds) || 0, 0), 30 * 86400);
+    const updated = await rotateSecretRec(secret, b.value, grace, scope.sub);
+    res.json({ secret: toPublicSecret(updated), graceSeconds: grace });
+  });
+
+  app.post('/v1/secrets/:name/revoke', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const secret = await scopedSecret(req, res, scope);
+    if (!secret) return;
+    const version = (req.body || {}).version === undefined ? undefined : Number((req.body || {}).version);
+    if (version !== undefined && (!Number.isInteger(version) || version < 1)) return res.status(400).json({ error: 'invalid_version' });
+    const revoked = await revokeSecretRec(secret, version);
+    res.json({ ok: true, revoked, version: version || 'all' });
+  });
+
+  app.delete('/v1/secrets/:name', async (req, res) => {
+    const scope = secretOrg(req, res);
+    if (!scope) return;
+    const secret = await scopedSecret(req, res, scope);
+    if (!secret) return;
+    await deleteSecretRec(secret);
+    res.json({ ok: true, name: secret.name });
+  });
+
+  /** Rotation webhook for external schedulers/HSMs. Authenticated by the
+   *  shared rotation token, never by a user session. */
+  app.post('/v1/secrets/rotation-webhook', async (req, res) => {
+    const configured = process.env.SECRET_ROTATION_WEBHOOK_SECRET || '';
+    const got = String(req.headers['x-rotation-token'] || '');
+    if (!configured || !got || !timingSafeEqual(Buffer.from(got), Buffer.from(configured))) {
+      return res.status(401).json({ error: 'invalid_rotation_token' });
+    }
+    const b = (req.body || {}) as any;
+    const org = String(b.orgId || '').trim();
+    const name = String(b.name || '').trim();
+    if (!org || !SECRET_NAME_RE.test(name) || typeof b.value !== 'string' || !b.value) {
+      return res.status(400).json({ error: 'invalid_rotation_request' });
+    }
+    const secret = await findSecretRec(org, name);
+    if (!secret) return res.status(404).json({ error: 'not_found' });
+    const grace = b.graceSeconds === undefined ? 86400 : Math.min(Math.max(Number(b.graceSeconds) || 0, 0), 30 * 86400);
+    const updated = await rotateSecretRec(secret, b.value, grace, 'rotation-webhook');
+    res.json({ secret: toPublicSecret(updated), graceSeconds: grace });
   });
 
   // ---------- /metrics (P2): Prometheus exposition ----------

@@ -130,6 +130,70 @@ metadata only (`{id, name, kind, accountId, createdAt, updatedAt}`). Implemented
 - `DELETE /v1/credentials/:id` → `{ok}`
 - `POST /v1/credentials/:id/rotate {secret}` → metadata
 
+## Human tasks — durable waits (`workflow-service`, gateway `/v1/human-tasks`)
+A `humanTask` / `waitForSignal` workflow node pauses an execution and creates a
+tenant-scoped task. Completing or rejecting the task resumes the run exactly
+once from the node's outgoing edges; earlier nodes are never replayed.
+
+| Method | Route | Description |
+| --- | --- | --- |
+| POST | `/v1/human-tasks` | Create a standalone task (`title`, `assignee?`, `candidateRoles?`, `deadline?`, `decisionSchema?`). |
+| GET | `/v1/human-tasks` | Tenant-scoped list (`status`, `executionId`, `workflowId`, `assignee`). |
+| GET | `/v1/human-tasks/:id` | Read one task. |
+| POST | `/v1/human-tasks/:id/claim` | Claim an open task (assignee-bound tasks require the assignee). |
+| POST | `/v1/human-tasks/:id/complete` | `{decision?, note?}`; resumes the paused execution. |
+| POST | `/v1/human-tasks/:id/reject` | Requires `note`; resumes the paused execution with `approved:false`. |
+| POST | `/v1/human-tasks/:id/expire` | Expire an overdue task (`force:true` for operators). |
+
+Node parameters: `title`, `description`, `assignee`, `candidateRoles`,
+`deadlineMinutes`/`deadlineAt`, `decisionSchema`. Completion is guarded by a
+conditional status transition, so duplicate decisions and double resumes return
+`409`. Task state lives in Postgres (`synapseone_human_tasks`) and survives
+restarts. All mutations flow through the audit trail.
+
+## Search (`base-service`, gateway `/v1/search`)
+| Method | Route | Description |
+| --- | --- | --- |
+| POST | `/v1/search` | `{query, mode:"fulltext"\|"semantic"\|"hybrid", collection?, collections?, filters?, limit?, cursor?}`. |
+| GET | `/v1/search?q=…` | Convenience query form. |
+| POST | `/v1/search/reindex` | Idempotently rebuild the tenant-visible index (`collections?`). |
+| GET | `/v1/search/status` | Indexed documents, collection count and freshness. |
+
+Results include `score`, highlighted snippets, ACL metadata, facets (`collection`,
+`type`, `status`) and an opaque `nextCursor`. Tenant and document ACLs are
+re-checked on every query; a reindex removes deleted documents. Semantic mode
+uses deterministic local embeddings (no network); hybrid blends both scores.
+
+## Secrets (`workflow-service`, gateway `/v1/secrets`)
+| Method | Route | Description |
+| --- | --- | --- |
+| POST | `/v1/secrets` | `{name, value, description?, scope?, accountId?}`. |
+| GET | `/v1/secrets` | Metadata only — values are never returned. |
+| GET | `/v1/secrets/:name` | Metadata plus version history. |
+| POST | `/v1/secrets/:name/read` | `{version?}`; decrypts one version and audits the access. |
+| POST | `/v1/secrets/:name/rotate` | `{value, graceSeconds?}` (default 24h, max 30d). |
+| POST | `/v1/secrets/:name/revoke` | Revoke one version or all versions. |
+| DELETE | `/v1/secrets/:name` | Soft-delete the secret and revoke all versions. |
+| POST | `/v1/secrets/rotation-webhook` | External scheduler/HKM rotation (`x-rotation-token`). |
+
+Values are AES-256-GCM encrypted with `SYNAPSEONE_CREDENTIAL_KEY` (32-byte hex,
+required in production); list responses and audit details never include them.
+Cross-tenant and account-mismatched reads return `404`.
+
+## SCIM 2.0 (`iam-service`, gateway `/scim/v2`)
+| Method | Route | Description |
+| --- | --- | --- |
+| POST/GET | `/v1/scim/tokens` | Issue/list scoped SCIM bearer tokens (`scim:read`, `scim:write`). |
+| DELETE | `/v1/scim/tokens/:id` | Revoke a token. |
+| GET/POST | `/scim/v2/Users` | List (filter `userName`, `externalId`, `active`) / create. |
+| GET/PUT/PATCH/DELETE | `/scim/v2/Users/:id` | Read, replace, patch (`active`, `displayName`, `externalId`) or deactivate. |
+| GET/POST | `/scim/v2/Groups` | List / create groups with `members` and explicit `roles`. |
+| GET/PATCH/DELETE | `/scim/v2/Groups/:id` | Read, add/remove members, delete. |
+
+SCIM requests authenticate with a scoped `scim_*` bearer token only — user JWTs
+are rejected. Group membership maps to IAM roles server-side and is audited.
+Deactivation sets `active:false`, revokes refresh tokens and API keys.
+
 ## Workflows (local built-in engine)
 
 - `GET /v1/templates` / `GET /v1/templates/:name`

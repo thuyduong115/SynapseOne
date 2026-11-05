@@ -519,10 +519,55 @@ def _write_body(data: Any, object: Any) -> dict:
         raise ValueError("provide exactly one of data or object")
     return {"data": data} if has_data else {"object": object}
 
+    # ---------------------------------------------------------------------------
+    # typed collection
+    # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# typed collection
-# ---------------------------------------------------------------------------
+    # ---- tenant-scoped search (#46) ----
+    def search(
+        self,
+        query: str,
+        *,
+        mode: str = "fulltext",
+        collection: str | None = None,
+        collections: list[str] | None = None,
+        filters: dict | None = None,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> dict:
+        """Full-text, semantic or hybrid search over Base documents."""
+        body: dict[str, Any] = {
+            "query": query,
+            "mode": mode,
+            "limit": limit,
+            "filters": filters or {},
+        }
+        if collection:
+            body["collection"] = collection
+        if collections:
+            body["collections"] = collections
+        if cursor:
+            body["cursor"] = cursor
+        return self._req("POST", "/v1/search", body)
+
+    def search_fulltext(self, query: str, **kwargs: Any) -> dict:
+        return self.search(query, mode="fulltext", **kwargs)
+
+    def search_semantic(self, query: str, **kwargs: Any) -> dict:
+        return self.search(query, mode="semantic", **kwargs)
+
+    def search_hybrid(self, query: str, **kwargs: Any) -> dict:
+        return self.search(query, mode="hybrid", **kwargs)
+
+    def reindex_search(self, collections: list[str] | None = None) -> dict:
+        return self._req(
+            "POST",
+            "/v1/search/reindex",
+            {"collections": collections} if collections else {},
+        )
+
+    def search_status(self) -> dict:
+        return self._req("GET", "/v1/search/status")
 
 
 class BaseCollection:

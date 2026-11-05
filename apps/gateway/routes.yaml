@@ -143,6 +143,24 @@ routes:
     target: ${STORAGE_SERVICE_URL:http://ocs:4010}
     auth: either
 
+  # Tenant-scoped search over SynapseBase documents (#46).
+  - path: /v1/search
+    target: ${BASE_SERVICE_URL:http://base:4005}
+    auth: either
+
+  # Tenant secret vault (#47), versioned and encrypted at rest.
+  - path: /v1/secrets
+    target: ${WORKFLOW_SERVICE_URL:http://workflow:4002}
+    auth: either
+
+  # SCIM admin token lifecycle (the /scim/v2 data plane carries its own token).
+  - path: /v1/scim
+    target: ${IAM_SERVICE_URL:http://iam:4001}
+    auth: either
+  - path: /scim
+    target: ${IAM_SERVICE_URL:http://iam:4001}
+    auth: none
+
   # SynapseNotifications — outbox, templates, preferences and delivery.
   - path: /v1/notifications
     target: ${NOTIFICATIONS_SERVICE_URL:http://notifications:4011}

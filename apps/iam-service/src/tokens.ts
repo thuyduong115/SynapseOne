@@ -356,6 +356,27 @@ export async function revokeApiKey(id: string): Promise<boolean> {
   return false;
 }
 
+/** Revoke every API key created on behalf of a deprovisioned user. */
+export async function revokeApiKeysForUser(userId: string): Promise<number> {
+  if (useDb()) {
+    const db = getDb()!;
+    await ensureTables();
+    const rows = await db.update(apiKeys)
+      .set({ revokedAt: sql`now()` })
+      .where(and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt)))
+      .returning({ id: apiKeys.id });
+    return rows.length;
+  }
+  let count = 0;
+  for (const rec of __mem.apiKeys.values()) {
+    if (rec.user_id === userId && !rec.revoked_at) {
+      rec.revoked_at = new Date().toISOString();
+      count++;
+    }
+  }
+  return count;
+}
+
 /** Lookup by id for tenant-scoped revoke (safe fields only). */
 export async function findApiKeyById(id: string): Promise<{ account_id: string } | null> {
   if (useDb()) {

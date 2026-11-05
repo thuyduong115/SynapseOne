@@ -56,6 +56,7 @@ export const users = pgTable(
     /** scrypt hash, null for OIDC-only / passwordless users. */
     passwordHash: text('password_hash'),
     emailVerified: boolean('email_verified').notNull().default(false),
+    active: boolean('active').notNull().default(true),
     passwordUpdatedAt: timestamp('password_updated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -255,5 +256,42 @@ export const auditLog = pgTable(
     index('idx_audit_actor').on(t.actorId, t.createdAt.desc()),
     index('idx_audit_time').on(t.createdAt.desc()),
     index('idx_audit_action').on(t.action, t.decision),
+  ],
+);
+
+/** SCIM provisioning tokens (#48): scoped, org-bound, hashed at rest. */
+export const scimTokens = pgTable(
+  'scim_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    description: text('description').notNull().default(''),
+    scopes: jsonb('scopes').$type<string[]>().notNull().default(sql`'["scim:read","scim:write"]'::jsonb`),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('scim_tokens_hash_key').on(t.tokenHash), index('idx_scim_tokens_org').on(t.orgId)],
+);
+
+/** SCIM groups with an explicit, audited role mapping. */
+export const scimGroups = pgTable(
+  'scim_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    accountId: uuid('account_id'),
+    displayName: text('display_name').notNull(),
+    externalId: text('external_id'),
+    members: jsonb('members').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    roles: jsonb('roles').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('scim_groups_org_name_key').on(t.orgId, t.displayName),
+    index('idx_scim_groups_org').on(t.orgId),
   ],
 );

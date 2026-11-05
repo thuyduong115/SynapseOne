@@ -401,6 +401,27 @@ class IamService:
         """List an account's roles."""
         return self._req("GET", f"/v1/accounts/{quote(account_id, safe='')}/roles")
 
+    # ---- SCIM provisioning (#48) ----
+    def create_scim_token(
+        self,
+        description: str = "",
+        scopes: list[str] | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"description": description}
+        if scopes:
+            body["scopes"] = scopes
+        if ttl_seconds:
+            body["ttlSeconds"] = ttl_seconds
+        return self._req("POST", "/v1/scim/tokens", body)
+
+    def list_scim_tokens(self) -> list:
+        raw = self._req("GET", "/v1/scim/tokens")
+        return raw.get("items", []) if isinstance(raw, dict) else (raw or [])
+
+    def revoke_scim_token(self, token_id: str) -> dict:
+        return self._req("DELETE", f"/v1/scim/tokens/{quote(token_id, safe='')}")
+
     def create_role(self, account_id: str, slug: str, description: str = "") -> dict:
         """Create a role inside an account."""
         return self._req(

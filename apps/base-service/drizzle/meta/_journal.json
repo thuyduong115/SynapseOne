@@ -36,6 +36,20 @@
       "when": 1795000000000,
       "tag": "0004_query_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793865824559,
+      "tag": "0005_broad_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793865857121,
+      "tag": "0006_lying_makkari",
+      "breakpoints": true
     }
   ]
 }

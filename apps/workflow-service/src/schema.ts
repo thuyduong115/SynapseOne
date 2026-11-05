@@ -79,3 +79,77 @@ export const credentials = pgTable(
     index('idx_synapseone_credentials_org').on(t.orgId),
   ],
 );
+
+export const humanTasks = pgTable(
+  'synapseone_human_tasks',
+  {
+    id: text('id').primaryKey(),
+    executionId: text('execution_id'),
+    workflowId: text('workflow_id'),
+    nodeName: text('node_name').notNull().default(''),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    status: text('status').notNull().default('pending'),
+    assignee: text('assignee'),
+    candidateRoles: jsonb('candidate_roles').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    decisionSchema: jsonb('decision_schema').$type<Record<string, any>>().notNull().default(sql`'{}'::jsonb`),
+    payload: jsonb('payload').$type<Record<string, any>>().notNull().default(sql`'{}'::jsonb`),
+    decision: jsonb('decision').$type<Record<string, any> | null>(),
+    note: text('note'),
+    claimedBy: text('claimed_by'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    completedBy: text('completed_by'),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    deadline: timestamp('deadline', { withTimezone: true }),
+    escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+    orgId: text('org_id'),
+    accountId: text('account_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('idx_synapseone_human_tasks_status').on(t.status, t.createdAt.desc()),
+    index('idx_synapseone_human_tasks_execution').on(t.executionId),
+    index('idx_synapseone_human_tasks_tenant').on(t.orgId, t.accountId),
+    index('idx_synapseone_human_tasks_deadline').on(t.status, t.deadline),
+  ],
+);
+
+export const secrets = pgTable(
+  'synapseone_secrets',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull(),
+    accountId: text('account_id'),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    scope: text('scope').notNull().default('tenant'),
+    currentVersion: integer('current_version').notNull().default(1),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('synapseone_secrets_tenant_name_key').on(t.orgId, t.accountId, t.name),
+    index('idx_synapseone_secrets_tenant').on(t.orgId, t.accountId),
+  ],
+);
+
+export const secretVersions = pgTable(
+  'synapseone_secret_versions',
+  {
+    id: text('id').primaryKey(),
+    secretId: text('secret_id').notNull(),
+    version: integer('version').notNull(),
+    valueEnc: text('value_enc').notNull(),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('synapseone_secret_versions_key').on(t.secretId, t.version),
+    index('idx_synapseone_secret_versions_secret').on(t.secretId, t.version.desc()),
+  ],
+);

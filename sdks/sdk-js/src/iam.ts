@@ -151,6 +151,13 @@ export class IamService {
   }
   userPolicies(userId: string) { return this.http.req(`/v1/users/${encodeURIComponent(userId)}/policies`); }
 
+  // ---- SCIM provisioning (#48) ----
+  createScimToken(input: { description?: string; scopes?: string[]; ttlSeconds?: number } = {}) {
+    return this.http.req('/v1/scim/tokens', { method: 'POST', body: JSON.stringify(input) });
+  }
+  listScimTokens() { return this.http.req('/v1/scim/tokens'); }
+  revokeScimToken(id: string) { return this.http.req(`/v1/scim/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+
   // ---- roles / policies ----
   createRole(accountId: string, slug: string, description = '') {
     return this.http.req(`/v1/accounts/${encodeURIComponent(accountId)}/roles`, { method: 'POST', body: JSON.stringify({ slug, description }) });

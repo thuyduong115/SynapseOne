@@ -15,6 +15,20 @@
       "when": 1794000000000,
       "tag": "0001_rebrand_synapseone",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793865621427,
+      "tag": "0002_curved_karnak",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793865937637,
+      "tag": "0003_past_tag",
+      "breakpoints": true
     }
   ]
 }

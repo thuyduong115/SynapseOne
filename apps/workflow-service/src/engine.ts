@@ -235,10 +235,12 @@ export interface NodeRun {
 }
 
 export interface RunResult {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'paused';
   output: any;
   nodeRuns: NodeRun[];
   error?: string;
+  /** Present when status === 'paused'. */
+  pause?: { node: string; task: any };
   /** With settings.onError=continue: errors that were absorbed per node. */
   partialErrors?: string[];
 }
@@ -269,6 +271,31 @@ export interface RunOpts {
   principal?: RunPrincipal | null;
   credentialResolver?: CredentialResolver;
   synapseoneCall?: SynapseOneCall;
+  /** Durable human-task bridge (#44). When a humanTask node is reached the
+   *  engine creates the task and pauses; the caller persists the checkpoint. */
+  humanTask?: {
+    create(input: {
+      node: string;
+      title: string;
+      description?: string;
+      assignee?: string | null;
+      candidateRoles?: string[];
+      decisionSchema?: Record<string, any>;
+      payload?: Record<string, any>;
+      deadline?: string | null;
+    }): Promise<any>;
+  };
+  /** Resume after a human decision: continue from the outgoing edges of
+   *  `node` with `output` as its result data. */
+  resumeFrom?: { node: string; output: any };
+}
+
+/** Thrown when a humanTask node pauses the run. Carries the created task. */
+export class HumanTaskPause extends Error {
+  constructor(public readonly node: string, public readonly task: any) {
+    super(`workflow paused for human task ${task?.id || ''}`.trim());
+    this.name = 'HumanTaskPause';
+  }
 }
 
 /** Audit actor for an execution: workflow:<id> principal:<sub|anonymous> (P0-2). */
@@ -2349,6 +2376,15 @@ export async function runWorkflow(
   const entries = entryNodes(nodes, connections).filter((n) => byName.has(n));
   type QueueItem = { name: string; input: any };
   const queue: QueueItem[] = entries.map((name) => ({ name, input: clone(input ?? {}) }));
+  if (opts?.resumeFrom) {
+    // Resume at the completed human task: do not replay earlier nodes, walk
+    // only its outgoing edges with the human decision as the node output.
+    queue.length = 0;
+    const resumeName = opts.resumeFrom.node;
+    for (const b of outgoingBranches(resumeName, connections)) {
+      for (const e of b) queue.push({ name: e.node, input: clone(opts.resumeFrom.output) });
+    }
+  }
   const visitCount = new Map<string, number>();
   const maxSteps = nodes.length * 3 + 10;
   let steps = 0;
@@ -2504,6 +2540,33 @@ export async function runWorkflow(
         // Configuration-only node: pass through when it is also used in flow.
         output = clone(data);
         break;
+      case 'humanTask':
+      case 'waitForSignal':
+      case 'synapseone.humanTask':
+      case 'synapseone.waitForSignal': {
+        if (opts?.resumeFrom?.node === node.name) {
+          output = clone(opts.resumeFrom.output);
+          break;
+        }
+        const p = node.parameters || {};
+        const minutes = Number(p.deadlineMinutes ?? p.deadline ?? 0);
+        const deadline = Number.isFinite(minutes) && minutes > 0
+          ? new Date(Date.now() + minutes * 60_000).toISOString()
+          : (typeof p.deadlineAt === 'string' ? p.deadlineAt : null);
+        const task = opts?.humanTask
+          ? await opts.humanTask.create({
+              node: node.name,
+              title: String(p.title || node.name || 'Human task'),
+              description: String(p.description || ''),
+              assignee: p.assignee ? String(p.assignee) : null,
+              candidateRoles: Array.isArray(p.candidateRoles) ? p.candidateRoles.map(String) : [],
+              decisionSchema: p.decisionSchema && typeof p.decisionSchema === 'object' ? p.decisionSchema : {},
+              payload: data && typeof data === 'object' ? data : { value: data },
+              deadline,
+            })
+          : { id: `task-${Date.now()}`, status: 'pending', synthetic: true };
+        throw new HumanTaskPause(node.name, task);
+      }
       default: {
         if (isIntegrationType(node.type)) {
           const r = await runNodeWithRetry('integration', node, data);
@@ -2543,6 +2606,19 @@ export async function runWorkflow(
       return { output: r.output, ...(r.branch !== undefined ? { branch: r.branch } : {}) };
     } catch (e: any) {
       const finishedAt = new Date().toISOString();
+      if (e instanceof HumanTaskPause) {
+        nodeRuns.push({
+          node: node.name,
+          type: node.type,
+          status: 'success',
+          input: clone(data),
+          output: { humanTask: e.task },
+          durationMs: Date.now() - t0,
+          startedAt,
+          finishedAt,
+        });
+        throw e;
+      }
       const msg = e?.message || String(e);
       nodeRuns.push({
         node: node.name,
@@ -2579,6 +2655,15 @@ export async function runWorkflow(
       execOut = r.output;
       branch = (r as any).branch;
     } catch (e: any) {
+      if (e instanceof HumanTaskPause) {
+        const result: RunResult = {
+          status: 'paused',
+          output: { humanTask: e.task },
+          nodeRuns,
+          pause: { node: e.node, task: e.task },
+        };
+        return result;
+      }
       const msg = `${cur.name}: ${e?.message || e}`;
       // P2 dead-letter: settings.onError=continue absorbs the failure and
       // keeps the run going with an empty item (errors surface in
