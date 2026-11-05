@@ -98,29 +98,12 @@ services:
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:?SYNAPSEONE_INTERNAL_SECRET must be set in production}
     ports: !reset []
 
-  # Production object storage: SeaweedFS (Apache-2.0, S3 API incl. multipart
-  # and presigned URLs) replaces the S3Mock dev store. Same service name and
-  # port, so OCS keeps STORAGE_S3_ENDPOINT=http://s3:9090. Data lives in its
-  # own volume; move old S3Mock objects with tools/storage/migrate-s3mock.sh.
+  # Object storage (SeaweedFS, defined in docker-compose.yml): production
+  # requires real credentials and keeps the S3 port off the host.
   s3:
-    image: chrislusf/seaweedfs:4.48
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        printf '{"identities":[{"name":"synapseone","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}'
-        "$$S3_ADMIN_ACCESS_KEY" "$$S3_ADMIN_SECRET_KEY" > /tmp/s3.json &&
-        exec weed server -dir=/data -ip=s3 -ip.bind=0.0.0.0 -volume.max=0
-        -master.volumeSizeLimitMB=1024 -s3 -s3.port=9090 -s3.config=/tmp/s3.json
     environment:
       S3_ADMIN_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:?STORAGE_S3_ACCESS_KEY must be set in production}
       S3_ADMIN_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:?STORAGE_S3_SECRET_KEY must be set in production}
-    volumes:
-      - seaweeddata:/data
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/cluster/status >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
     ports: !reset []
 
   s3-init:
@@ -211,7 +194,6 @@ services:
 volumes:
   certbot-www:
   letsencrypt:
-  seaweeddata:
   pgbackups:
 
 networks:

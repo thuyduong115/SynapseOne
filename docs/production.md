@@ -53,9 +53,8 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
       with a `.sha256`) into the `pgbackups` volume. Run one now with
       `docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm pg-backup --once`,
       copy the volume off the host, and rehearse `tools/backup/pg-restore.sh <file.dump>`.
-- [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials. The prod
-      overlay replaces S3Mock with SeaweedFS; migrate old objects with
-      `tools/storage/migrate-s3mock.sh` (`docs/object-storage.md`). Set
+- [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials (they are
+      also the SeaweedFS identity, `docs/object-storage.md`). Set
       `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.
 - [ ] IAM: set `IAM_MFA_ENCRYPTION_KEY` (`openssl rand -hex 32`) before users enrol MFA;
       keep `IAM_LOGIN_MAX_FAILURES`/`IAM_LOGIN_LOCKOUT_SECONDS` at their defaults or stricter.

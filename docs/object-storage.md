@@ -6,7 +6,7 @@
 SynapseOCS (Object Cloud Storage) is the Tier-1 bucket-aware object store. It
 speaks its own `/v1/ocs` API at the gateway and keeps the original
 `/v1/storage` API as the default-bucket compatibility surface. Bytes live in an
-S3-compatible backend (MinIO, AWS S3 or S3Mock) in production and on a local
+S3-compatible backend (SeaweedFS in Compose, or AWS S3) in production and on a local
 filesystem for development/single-node deployments.
 
 ## Capabilities
@@ -92,20 +92,16 @@ tenant/bucket/key/method; hand it only to the intended client. The legacy
 | `STORAGE_S3_REGION` | `us-east-1` | backend region |
 | `STORAGE_S3_PATH_STYLE` | `true` | `false` for AWS virtual-host style |
 
-Compose ships S3Mock for local development only. `docker-compose.prod.yml` swaps
-the `s3` service for **SeaweedFS** (`chrislusf/seaweedfs:4.48`, Apache-2.0): same
-service name and port, so OCS keeps `STORAGE_S3_ENDPOINT=http://s3:9090` with
-`STORAGE_S3_PATH_STYLE=true`. SeaweedFS uses `STORAGE_S3_ACCESS_KEY` /
-`STORAGE_S3_SECRET_KEY` as its only identity (use letters and digits), stores data
-in the `seaweeddata` volume and is reachable only on the internal network.
+Compose runs **SeaweedFS** (`chrislusf/seaweedfs:4.48`, Apache-2.0) as the `s3`
+service in development and production: OCS uses `STORAGE_S3_ENDPOINT=http://s3:9090`
+with `STORAGE_S3_PATH_STYLE=true`. SeaweedFS uses `STORAGE_S3_ACCESS_KEY` /
+`STORAGE_S3_SECRET_KEY` as its only identity (letters and digits; `test`/`test` in
+dev), keeps data in the `seaweeddata` volume, and the prod overlay requires real
+keys and removes the host port.
 
-Moving an existing deployment off S3Mock:
-
-1. Deploy the prod overlay (the new `s3` service starts empty; `s3-init` creates the bucket).
-2. Run `tools/storage/migrate-s3mock.sh` from the repository root. It mounts the old
-   `s3data` volume in a temporary S3Mock and copies every object with its key and
-   Content-Type through the OCS S3 client. Re-running skips objects already copied.
-3. Check a few files through `/v1/ocs`, then delete the old `s3data` volume.
+Earlier releases used S3Mock, which deletes its files whenever the container stops,
+so a deployment upgrading from it has no durable objects to carry over: OCS buckets
+are recreated on demand (SynapseDX does this automatically for `synapsedx-files`).
 
 Back up the `seaweeddata` volume (or replicate to another S3 target) alongside the
 Postgres dumps described in `docs/production.md`. The bucket

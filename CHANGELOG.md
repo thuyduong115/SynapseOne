@@ -18,9 +18,9 @@ Format based on Keep a Changelog; versioning follows SemVer.
   Org admins: `DELETE /v1/users/:id/mfa` (lost device) and `POST /v1/users/:id/unlock`.
 - Clients: JS/Python/Go SDK MFA methods, CLI `login --password/--code/--recovery-code`
   and `mfa …`, Console *Security* page, MFA step on sign-in and admin actions on *Users*.
-- **Production object storage**: `docker-compose.prod.yml` runs SeaweedFS 4.48
-  (Apache-2.0) instead of S3Mock on the same `s3:9090` endpoint;
-  `tools/storage/migrate-s3mock.sh` copies existing objects (key + Content-Type).
+- **Object storage**: Compose runs SeaweedFS 4.48 (Apache-2.0) instead of S3Mock on
+  the same `s3:9090` endpoint, in dev and production (S3Mock deleted its files on
+  every container stop). Data lives in the `seaweeddata` volume.
 - **Postgres backups**: `pg-backup` service in the prod overlay (daily pg_dump of the
   platform and Authentik databases, checksums, retention) and
   `tools/backup/pg-restore.sh`.

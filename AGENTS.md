@@ -35,7 +35,7 @@ Skip: `node_modules/`, `apps/*/dist/`, `.pytest_cache/`, `.ruff_cache/`,
 - React 18 + Vite + Tailwind Console (plain JSX, not TypeScript).
 - Python 3.11 FastAPI inference service (local embeddings/decision model +
   OpenRouter-compatible LLM proxy).
-- Postgres 16 (pgvector image), Redis 7, S3Mock (S3-compatible) in Compose.
+- Postgres 16 (pgvector image), Redis 7, SeaweedFS (S3-compatible) in Compose.
 - Every stateful service has an in-memory fallback for dev/tests; production
   boot fails if the real backend or internal secret is missing.
 
