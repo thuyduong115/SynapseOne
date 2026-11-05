@@ -23,7 +23,14 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { S3Client } from './dist/s3.js';
+import { pathToFileURL } from 'node:url';
+
+// The OCS image ships the client next to this script; tests point elsewhere.
+const { S3Client } = await import(clientModuleOverride() ?? './dist/s3.js');
+function clientModuleOverride() {
+  const m = process.env.S3_BACKUP_CLIENT_MODULE;
+  return m ? pathToFileURL(m).href : undefined;
+}
 
 const env = process.env;
 const DIR = env.BACKUP_DIR || '/backups';

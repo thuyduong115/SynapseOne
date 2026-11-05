@@ -55,7 +55,9 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
       `BACKUP_RETENTION_DAYS`=7. Run them now with
       `docker compose -f docker-compose.yml run --rm --no-deps pg-backup --once` and
       `... run --rm --no-deps s3-backup once`, and rehearse `tools/backup/pg-restore.sh <file.dump>`
-      and `s3-backup restore latest --dry-run`. Both volumes live on the same host:
+      and `s3-backup restore latest --dry-run` (`pg-restore.sh` asks you to type the database
+      name, verifies the `.sha256` and restores in one transaction; stop the services
+      using that database first). Both volumes live on the same host:
       copying them elsewhere is the operator's choice.
 - [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials (they are
       also the SeaweedFS identity, `docs/object-storage.md`). Set

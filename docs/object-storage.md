@@ -69,7 +69,7 @@ curl "https://api.synapseone.space/v1/ocs/buckets/city-assets/objects/2026/10/ph
 ## Multipart
 
 Create an upload, PUT numbered parts (max 10,000), then complete with the
-returned ETags. The filesystem backend assembles the parts; S3/MinIO uses
+returned ETags. The filesystem backend assembles the parts; the S3 backend (SeaweedFS/AWS) uses
 native multipart. Abort removes the temporary upload directory.
 
 ## Presigned URLs
@@ -160,4 +160,4 @@ API (`/v1/storage`).
 Tier 2 wraps SynapseOCS as the files capability and stores bucket/key metadata
 in Base; it does not store base64 payloads in documents. Tier 3 uploads evidence
 and stores the returned bucket/key or presigned URL. Neither Tier 2 nor Tier 3
-talks to the backend S3/MinIO credentials directly.
+talks to the backend S3 credentials directly.

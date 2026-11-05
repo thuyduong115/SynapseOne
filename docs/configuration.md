@@ -177,6 +177,18 @@ production), `STORAGE_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY/PATH_STYLE
 `STORAGE_FS_ROOT`, `STORAGE_MAX_OBJECT_BYTES` (25 MiB), `STORAGE_TENANT_QUOTA_BYTES`
 (5 GiB), `STORAGE_ALLOWED_CONTENT_TYPES`.
 
+## Backups (`pg-backup`, `s3-backup` in docker-compose.yml)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `BACKUP_INTERVAL_SECONDS` | `86400` | time between runs of both backup services |
+| `BACKUP_RETENTION_DAYS` | `7` | Postgres dumps and object snapshots older than this are removed (the newest snapshot is always kept) |
+| `BACKUP_DATABASES` | `${POSTGRES_DB} authentik` | space-separated databases `pg-backup` dumps (missing ones are skipped) |
+
+`pg-backup` uses `POSTGRES_USER`/`POSTGRES_PASSWORD`; `s3-backup` uses the same
+`STORAGE_S3_*` settings as OCS. Volumes: `pgbackups`, `s3backups`. See
+`docs/production.md` and `docs/object-storage.md`.
+
 ## Notifications (`apps/notifications-service`)
 
 See `docs/notifications.md`. Key settings: `DATABASE_URL` (required in production),
@@ -196,5 +208,7 @@ See `docs/notifications.md`. Key settings: `DATABASE_URL` (required in productio
 
 Postgres (`POSTGRES_*`; IAM, workflow, LDS and Base), Redis (`REDIS_URL`; gateway
 rate limiting, Faststore and Queue), Authentik (`AUTHENTIK_*`, host ports
-`AUTHENTIK_HTTP_PORT=19000`), S3 (`S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY`,
-`S3_HOST_PORT=9090`).
+`AUTHENTIK_HTTP_PORT=19000`), object storage = SeaweedFS (`s3` service; its only
+identity is `STORAGE_S3_ACCESS_KEY`/`STORAGE_S3_SECRET_KEY`, falling back to
+`S3_ACCESS_KEY`/`S3_SECRET_KEY`; host port `S3_HOST_PORT=9090`; data volume
+`seaweeddata`).

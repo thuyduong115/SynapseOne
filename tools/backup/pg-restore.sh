@@ -8,13 +8,17 @@
 # Run on the Docker host from the repository root. Stop the services that use
 # the database first (e.g. `docker compose stop iam base workflow ...`). The
 # dump is verified against its .sha256 file when present, then restored with
-# --clean --if-exists inside one transaction.
+# --clean --if-exists inside one transaction. Objects in the dump replace the
+# current ones; objects created after the dump (e.g. a new table) are left alone.
+# Set COMPOSE_FILE_ARGS="-f docker-compose.yml -f docker-compose.prod.yml" when
+# the stack runs with the prod overlay (default: docker-compose.yml only).
 set -eu
 
 file="${1:-}"
 [ -n "$file" ] && [ -f "$file" ] || { echo "usage: pg-restore.sh <file.dump> [database]" >&2; exit 2; }
 db="${2:-$(basename "$file" | sed 's/-[0-9]\{8\}T[0-9]\{6\}Z\.dump$//')}"
-compose="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+# Same compose files the stack was started with (add the prod overlay if you use it).
+compose="docker compose ${COMPOSE_FILE_ARGS:--f docker-compose.yml}"
 
 if [ -f "$file.sha256" ]; then
   expected=$(cut -d' ' -f1 "$file.sha256")

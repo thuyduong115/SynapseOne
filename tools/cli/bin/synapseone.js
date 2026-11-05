@@ -273,6 +273,13 @@ function parse(argv) {
     else if (a.startsWith('--user=')) opts.user = a.slice(7);
     else if (a === '--managed') opts.managed = argv[++i];
     else if (a.startsWith('--managed=')) opts.managed = a.slice(10);
+    // Sign-in and MFA flags.
+    else if (a === '--password') opts.password = argv[++i];
+    else if (a.startsWith('--password=')) opts.password = a.slice(11);
+    else if (a === '--code') opts.code = argv[++i];
+    else if (a.startsWith('--code=')) opts.code = a.slice(7);
+    else if (a === '--recovery-code') opts['recovery-code'] = argv[++i];
+    else if (a.startsWith('--recovery-code=')) opts['recovery-code'] = a.slice(16);
     else args.push(a);
   }
   return { args, opts };
