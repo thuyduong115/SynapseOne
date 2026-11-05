@@ -103,8 +103,30 @@ Earlier releases used S3Mock, which deletes its files whenever the container sto
 so a deployment upgrading from it has no durable objects to carry over: OCS buckets
 are recreated on demand (SynapseDX does this automatically for `synapsedx-files`).
 
-Back up the `seaweeddata` volume (or replicate to another S3 target) alongside the
-Postgres dumps described in `docs/production.md`. The bucket
+## Backups
+
+The `s3-backup` service (docker-compose.yml) takes a daily snapshot of the bucket
+into the `s3backups` volume with `tools/backup/s3-backup.mjs`, run in the OCS image:
+
+- content is stored once per SHA-256 under `blobs/`; each snapshot is a manifest
+  (`snapshots/<UTC stamp>.json`) of key, size, ETag, Content-Type and SHA-256;
+- unchanged objects (same key, size and ETag) are not downloaded again;
+- snapshots older than `BACKUP_RETENTION_DAYS` (7) are removed, the newest is always
+  kept, and blobs no snapshot uses are deleted.
+
+```bash
+C="docker compose -f docker-compose.yml"
+$C run --rm s3-backup once                        # snapshot now
+$C run --rm s3-backup list                        # snapshots with object counts
+$C run --rm s3-backup restore latest --dry-run    # what would change
+$C run --rm s3-backup restore 20261106T020000Z --prefix tenants/org_x/
+```
+
+Restore writes objects back with their original Content-Type after checking the
+blob SHA-256, skips objects that are already identical and never deletes objects
+from the store. Postgres dumps are covered in `docs/production.md`.
+
+The bucket
 policy should allow only SynapseOCS credentials to read/write the backend;
 clients should use the OCS API/presigned URLs, not the backend directly.
 

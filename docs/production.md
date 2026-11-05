@@ -48,11 +48,15 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
 
 ## 3. Data
 
-- [ ] Postgres backups: the prod overlay runs `pg-backup` (pg_dump custom format of
-      `synapseone` and `authentik`, daily, kept `BACKUP_RETENTION_DAYS`=7, each dump
-      with a `.sha256`) into the `pgbackups` volume. Run one now with
-      `docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm pg-backup --once`,
-      copy the volume off the host, and rehearse `tools/backup/pg-restore.sh <file.dump>`.
+- [ ] Backups run from `docker-compose.yml`, so every deploy path starts them:
+      `pg-backup` (pg_dump custom format of `synapseone` and `authentik`, daily, each
+      dump with a `.sha256`, volume `pgbackups`) and `s3-backup` (incremental object
+      snapshots, volume `s3backups`, `docs/object-storage.md`). Both keep
+      `BACKUP_RETENTION_DAYS`=7. Run them now with
+      `docker compose -f docker-compose.yml run --rm pg-backup --once` and
+      `... run --rm s3-backup once`, and rehearse `tools/backup/pg-restore.sh <file.dump>`
+      and `s3-backup restore latest --dry-run`. Both volumes live on the same host:
+      copying them elsewhere is the operator's choice.
 - [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials (they are
       also the SeaweedFS identity, `docs/object-storage.md`). Set
       `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.

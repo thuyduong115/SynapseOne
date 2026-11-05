@@ -21,9 +21,15 @@ Format based on Keep a Changelog; versioning follows SemVer.
 - **Object storage**: Compose runs SeaweedFS 4.48 (Apache-2.0) instead of S3Mock on
   the same `s3:9090` endpoint, in dev and production (S3Mock deleted its files on
   every container stop). Data lives in the `seaweeddata` volume.
-- **Postgres backups**: `pg-backup` service in the prod overlay (daily pg_dump of the
-  platform and Authentik databases, checksums, retention) and
-  `tools/backup/pg-restore.sh`.
+- **Backups** (docker-compose.yml): `pg-backup` (daily pg_dump of the platform and
+  Authentik databases, checksums, retention, `tools/backup/pg-restore.sh`) and
+  `s3-backup` (daily incremental object-store snapshots deduplicated by SHA-256, with
+  Content-Type, retention and `restore`).
+
+### Fixed
+- OCS S3 client decodes XML character references in listed keys, ETags,
+  continuation tokens and multipart upload IDs. On SeaweedFS, keys containing `&`
+  were listed as `&amp;` and ETags as `&#34;…&#34;`.
 
 ### Added
 - Durable human tasks / wait-for-signal (`/v1/human-tasks`, `humanTask` node)

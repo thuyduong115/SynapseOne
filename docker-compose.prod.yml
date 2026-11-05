@@ -112,29 +112,10 @@ services:
       AWS_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_KEY:?STORAGE_S3_SECRET_KEY must be set in production}
       S3_BUCKET: ${STORAGE_S3_BUCKET:?STORAGE_S3_BUCKET must be set in production}
 
-  # Nightly logical backups of the platform and Authentik databases
-  # (pg_dump custom format, kept BACKUP_RETENTION_DAYS). Restore with
-  # tools/backup/pg-restore.sh. Copy the backups volume off the host too.
+  # Backups (pg-backup, s3-backup) are defined in docker-compose.yml.
   pg-backup:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    entrypoint: ["/bin/sh", "/backup/pg-backup.sh"]
-    command: ["--loop"]
     environment:
-      PGHOST: postgres
-      PGUSER: ${POSTGRES_USER:-synapseone}
       PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in production}
-      BACKUP_DATABASES: ${BACKUP_DATABASES:-${POSTGRES_DB:-synapseone} authentik}
-      BACKUP_DIR: /backups
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
-    volumes:
-      - ./tools/backup/pg-backup.sh:/backup/pg-backup.sh:ro
-      - pgbackups:/backups
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: [synapseone-net]
 
   inference:
     environment:
@@ -194,7 +175,6 @@ services:
 volumes:
   certbot-www:
   letsencrypt:
-  pgbackups:
 
 networks:
   synapsedx-public-stack:
