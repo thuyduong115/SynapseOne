@@ -32,6 +32,7 @@ jobs:
       - run: npm run build --workspaces --if-present
       - run: npm run test --workspaces --if-present
       # API catalog drift gate (console try-it + AI agent + docs/api.md).
+      - run: node tools/migration-check.mjs
       - run: node tools/catalog-check.mjs
       # Prod-dep audit: fails only on CRITICAL (the known HIGH `braces` advisory is
       # accepted + tracked in SECURITY.md — fix would be a breaking downgrade).
