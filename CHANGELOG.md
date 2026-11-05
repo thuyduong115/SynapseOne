@@ -6,6 +6,9 @@ Format based on Keep a Changelog; versioning follows SemVer.
 ## [Unreleased]
 
 ### Added
+- SynapseDX management console is served at the public root `https://synapsedx.sbs/`
+  while `/v1/*` and `/health` stay on the Tier-2 gateway; the legacy
+  `cloud.synapsedx.sbs` host redirects to the root.
 - Release images now use Buildx provenance/SBOM attestations and keyless
   cosign signing (#49).
 - Security/quality workflows with CodeQL (TypeScript + Python), dependency

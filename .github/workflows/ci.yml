@@ -50,6 +50,12 @@ jobs:
       - run: pip install -r apps/inference-service/requirements.txt
       - run: pytest apps/inference-service/tests -q
       - run: ruff check sdks/sdk-python apps/inference-service && ruff format --check sdks/sdk-python apps/inference-service
+      - name: Edge nginx config guard
+        run: |
+          if grep -RIn '^[[:space:]]*//' infra/prod/*.conf; then
+            echo 'nginx configs must use # comments, not //' >&2
+            exit 1
+          fi
       - run: docker compose config
   docker:
     runs-on: ubuntu-latest

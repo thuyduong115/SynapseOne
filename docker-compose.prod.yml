@@ -119,7 +119,7 @@ services:
   nginx:
     build:
       context: ./infra/prod
-    image: synapseone/edge:0.7.0
+    image: synapseone/edge:0.7.1
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:-synapseone.space}
