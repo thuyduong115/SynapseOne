@@ -69,9 +69,9 @@ export default function Chatbot({ auth, headers, onOpenInDocs }) {
       const st = e?.status;
       const text =
         st === 401
-          ? 'Session expired — sign in again, then ask away.'
+          ? 'Session expired. Sign in again, then ask away.'
           : st === 429
-            ? 'Slow down a little — then try again.'
+            ? 'Slow down a little, then try again.'
             : 'Sorry, I could not answer that. Try again.';
       setMsgs((m) => [...m, { role: 'ai', text }]);
     } finally {
@@ -85,7 +85,7 @@ export default function Chatbot({ auth, headers, onOpenInDocs }) {
     if (!sug || sBusy) return;
     // The agent generates the call (not the user picking a documented
     // endpoint), so destructive methods get an explicit confirm.
-    if ((sug.method === 'PUT' || sug.method === 'PATCH' || sug.method === 'DELETE') && !window.confirm(`${sug.method} ${sug.path} — proceed?`)) {
+    if ((sug.method === 'PUT' || sug.method === 'PATCH' || sug.method === 'DELETE') && !window.confirm(`${sug.method} ${sug.path}: proceed?`)) {
       return;
     }
     setSErr(null);

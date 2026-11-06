@@ -4,7 +4,7 @@
  * Copyright 2026 SynapseOne Contributors
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { Menu, X } from 'lucide-react';
@@ -62,6 +62,14 @@ function ScopePicks({ scope, onDone }) {
 export default function Topbar({ servicesOpen = true, onToggleServices }) {
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState(false);
+  // A hairline under the bar once the page scrolls, so the edge reads clearly.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
   const { auth, headers, logout } = useAuth();
   const scope = useScope();
   const { m } = useI18n();
@@ -108,9 +116,12 @@ export default function Topbar({ servicesOpen = true, onToggleServices }) {
       <div
         className={`hidden lg:flex fixed top-0 ${
           servicesOpen ? 'console-topbar-dual' : 'console-topbar-single'
-        } h-16 z-30 px-4 lg:px-6 items-center justify-end pointer-events-none transition-all duration-200`}
+        } h-16 z-30 px-4 lg:px-6 items-center justify-end console-topbar-band border-b transition-all duration-200 ${
+          scrolled ? 'border-slate-200 shadow-[0_6px_12px_-10px_rgba(15,27,45,0.25)]' : 'border-transparent'
+        }`}
       >
-        <div className="max-w-6xl mx-auto w-full flex items-center justify-end gap-2 pointer-events-auto">
+        {/* Solid band: page content scrolls under it instead of showing between the controls. */}
+        <div className="max-w-6xl mx-auto w-full flex items-center justify-end gap-2">
           <SiteToggles className="bg-white rounded-2xl shadow-sm px-0.5 py-0.5" />
           <ScopePicks scope={scope} />
 

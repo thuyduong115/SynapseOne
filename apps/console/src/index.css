@@ -303,3 +303,18 @@ html.dark .sdx-skeleton {
   background-color: #18233a;
   background-image: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0) 100%);
 }
+
+/* Inline code inside the docs pages. */
+.s1-prose :where(p, li) code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  background: var(--s1-bg);
+  border: 1px solid var(--s1-line);
+  color: var(--s1-fg);
+}
+
+/* Console top bar: same colour as the page so it reads as part of it, solid so content scrolls under. */
+.console-topbar-band { background: #f6f7fb; }
+html.dark .console-topbar-band { background: #0b1220; }

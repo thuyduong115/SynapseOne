@@ -97,7 +97,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-      <p className="mt-4 text-xs text-normal-text">{m.console.footer}</p>
     </aside>
   );
 }

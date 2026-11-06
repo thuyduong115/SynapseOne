@@ -11,6 +11,8 @@ import Sidebar from './components/Sidebar.jsx';
 import ServicesSidebar from './components/ServicesSidebar.jsx';
 import Topbar from './components/Topbar.jsx';
 import PublicHeader from './components/PublicHeader.jsx';
+import PublicFooter from './components/PublicFooter.jsx';
+import ConsoleFooter from './components/ConsoleFooter.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { ScopeProvider } from './components/Scope.jsx';
 import { PageSkeleton, RouteProgress, ScrollToTop } from './components/loading.jsx';
@@ -64,9 +66,10 @@ function Guard({ children }) {
 // Public pages: primary navigation via the header above.
 function PublicLayout({ children }) {
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-s1-bg text-s1-fg">
       <PublicHeader />
-      <main className="mx-auto max-w-6xl px-4 pt-24 pb-12 sdx-page-enter">{children}</main>
+      <main className="mx-auto max-w-6xl px-4 pt-28 pb-16 sdx-page-enter">{children}</main>
+      <PublicFooter />
     </div>
   );
 }
@@ -108,6 +111,7 @@ function ConsoleLayout({ children }) {
         >
           <div className="max-w-6xl mx-auto w-full">
             {children}
+            <ConsoleFooter />
           </div>
         </main>
       </ScopeProvider>

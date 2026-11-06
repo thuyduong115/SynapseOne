@@ -13,7 +13,16 @@ Format based on Keep a Changelog; versioning follows SemVer.
 - Home and About use a quieter layout: left-aligned headings, one hairline grid for
   the platform features, terminal panels for the CLI and self-host commands, and a
   drawn tier stack instead of ASCII art. Platform features on Home and About share
-  one set of numbered cards with blue icon tiles (lucide icons). About lists the team and partner
+  one set of numbered cards with blue icon tiles (lucide icons).
+- Docs and API Docs use one docs layout: section navigation on the left, an
+  "On this page" list, dark code panels with a copy button, method labels and
+  translated page chrome. API Docs gains a filter, path parameters highlighted and a
+  cleaner try-it panel; public docs pages now have the full footer.
+- Dashboard request timeline: bars fit the card without a scrollbar, the time axis
+  sits on its own row and the tooltip is no longer clipped.
+- Console top bar is a solid band, so page content no longer shows between the
+  controls while scrolling; console pages end with a footer (licence, docs, GitHub,
+  issues) instead of the line under the sidebar. About lists the team and partner
   organisations, and every public page has a full footer (product, project, support
   and licence links).
 - Font changed to Be Vietnam Pro (JetBrains Mono for code), which renders stacked
