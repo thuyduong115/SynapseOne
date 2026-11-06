@@ -10,25 +10,22 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faArrowDown,
   faArrowUpRightFromSquare,
-  faBolt,
   faBook,
   faCode,
   faCodeBranch,
   faCube,
   faCubes,
-  faDatabase,
-  faKey,
   faLayerGroup,
-  faRobot,
   faScaleBalanced,
-  faShieldHalved,
 } from '@fortawesome/free-solid-svg-icons';
+import { Bot, Database, KeyRound, Layers, ShieldCheck, Zap } from 'lucide-react';
+import FeatureGrid from '../components/FeatureGrid.jsx';
 import PublicHeader from '../components/PublicHeader.jsx';
 import PublicFooter from '../components/PublicFooter.jsx';
 import { useI18n } from '../lib/i18n-context.js';
 
 // Icons in the same order as `about.features` in src/locales.
-const FEATURE_ICONS = [faShieldHalved, faKey, faBolt, faDatabase, faLayerGroup, faRobot];
+const FEATURE_ICONS = [ShieldCheck, KeyRound, Zap, Database, Layers, Bot];
 
 // Each link shows the host it opens, so readers know where they are going.
 const LINKS = [
@@ -89,15 +86,7 @@ export default function About() {
 
         <section className="mt-20">
           <h2 className={H2}>{a.featuresHeading}</h2>
-          <div className="mt-6 grid gap-px overflow-hidden rounded-2xl border border-s1-line bg-s1-line sm:grid-cols-2 lg:grid-cols-3">
-            {a.features.map((f, i) => (
-              <div key={f.title} className="bg-s1-surface p-6">
-                <FontAwesomeIcon icon={FEATURE_ICONS[i]} className="text-lg text-s1-accent" />
-                <h3 className="mt-4 font-semibold">{f.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-s1-muted">{f.text}</p>
-              </div>
-            ))}
-          </div>
+          <FeatureGrid items={a.features} icons={FEATURE_ICONS} />
         </section>
 
         <section className="mt-20 grid gap-12 lg:grid-cols-2">

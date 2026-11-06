@@ -12,7 +12,8 @@ Format based on Keep a Changelog; versioning follows SemVer.
 - Dark theme for the whole Console through shared colour tokens in `index.css`.
 - Home and About use a quieter layout: left-aligned headings, one hairline grid for
   the platform features, terminal panels for the CLI and self-host commands, and a
-  drawn tier stack instead of ASCII art. About lists the team and partner
+  drawn tier stack instead of ASCII art. Platform features on Home and About share
+  one set of numbered cards with blue icon tiles (lucide icons). About lists the team and partner
   organisations, and every public page has a full footer (product, project, support
   and licence links).
 - Font changed to Be Vietnam Pro (JetBrains Mono for code), which renders stacked

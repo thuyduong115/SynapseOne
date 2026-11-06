@@ -6,24 +6,17 @@
  */
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-  faBolt,
-  faKey,
-  faLayerGroup,
-  faRobot,
-  faShieldHalved,
-  faWandMagicSparkles,
-} from '@fortawesome/free-solid-svg-icons';
+import { Bot, KeyRound, Layers, ShieldCheck, WandSparkles, Zap } from 'lucide-react';
 import PublicHeader from '../components/PublicHeader.jsx';
 import PublicFooter from '../components/PublicFooter.jsx';
+import FeatureGrid from '../components/FeatureGrid.jsx';
 import Terminal from '../components/Terminal.jsx';
 import { PRIMARY_BTN, SECONDARY_BTN } from '../components/public-styles.js';
 import { appDashboardUrl, isCanonicalAppHost } from '../lib/site.js';
 import { useI18n } from '../lib/i18n-context.js';
 
 // Icons in the same order as `landing.features` in src/locales.
-const FEATURE_ICONS = [faShieldHalved, faKey, faBolt, faLayerGroup, faRobot, faWandMagicSparkles];
+const FEATURE_ICONS = [ShieldCheck, KeyRound, Zap, Layers, Bot, WandSparkles];
 
 export default function Landing() {
   const { m } = useI18n();
@@ -69,18 +62,9 @@ export default function Landing() {
           </div>
         </section>
 
-        {/* Six building blocks: one hairline grid instead of six floating cards. */}
         <section className="mt-24">
           <h2 className="text-2xl font-semibold tracking-tight">{t.featuresHeading}</h2>
-          <div className="mt-6 grid gap-px overflow-hidden rounded-2xl border border-s1-line bg-s1-line sm:grid-cols-2 lg:grid-cols-3">
-            {t.features.map((f, i) => (
-              <div key={f.title} className="bg-s1-surface p-6">
-                <FontAwesomeIcon icon={FEATURE_ICONS[i]} className="text-lg text-s1-accent" />
-                <h3 className="mt-4 font-semibold">{f.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-s1-muted">{f.text}</p>
-              </div>
-            ))}
-          </div>
+          <FeatureGrid items={t.features} icons={FEATURE_ICONS} />
         </section>
 
         <section className="mt-24 grid gap-8 lg:grid-cols-[1fr_1.6fr] lg:items-center">
