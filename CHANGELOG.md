@@ -5,6 +5,11 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Added
+- TLS edge now serves `contribution.synapsecity.sbs` (OpenInfra GISTool data
+  contribution portal): HTTPS server block, `/api/` proxy to the backend,
+  ACME/HTTP redirect, and the host added to the Let's Encrypt certificate.
+
 ### Changed
 - The bundled object store is now **SeaweedFS** (real S3 semantics, persistent
   `seaweeddata` volume, loopback-only host port) instead of the `adobe/s3mock`
