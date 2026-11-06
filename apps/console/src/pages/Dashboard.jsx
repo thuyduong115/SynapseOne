@@ -736,45 +736,66 @@ export default function Dashboard() {
                     <p className="text-[11px] text-normal-text mt-1">Make API calls via Gateway to see live throughput bars here.</p>
                   </div>
                 ) : (
-                  <div className="mt-2">
-                    <div className="h-36 w-full flex items-end gap-1 px-1 pt-4 pb-2 bg-background rounded-2xl overflow-x-auto">
+                  <div className="mt-2 rounded-2xl bg-background px-2 pt-6 pb-2">
+                    {/* Bars only: no scroll container, so the tooltip is never clipped and every bucket fits the card. */}
+                    <div className="relative h-32 flex items-end gap-[3px] sm:gap-1">
                       {series.map((pt, idx) => {
                         const count = pt.requests || 0;
                         const errors = pt.errors || 0;
-                        const successCount = Math.max(0, count - errors);
 
-                        // Percent of max height (up to 100px)
                         const totalPct = count > 0 ? Math.max(6, Math.min(100, Math.round((count / maxSeriesReq) * 100))) : 0;
                         const errorPct = count > 0 && errors > 0 ? Math.max(4, Math.round((errors / count) * totalPct)) : 0;
                         const successPct = Math.max(0, totalPct - errorPct);
-
-                        const timeLabel = new Date(pt.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        // Keep the tooltip inside the card near the edges.
+                        const pos = idx / Math.max(1, series.length - 1);
+                        const align = pos < 0.25 ? 'left-0' : pos > 0.75 ? 'right-0' : 'left-1/2 -translate-x-1/2';
 
                         return (
                           <div
                             key={pt.ts || idx}
-                            className="flex-1 min-w-[12px] max-w-[28px] h-full flex flex-col justify-end items-center group relative cursor-pointer"
+                            className="flex-1 min-w-0 h-full flex flex-col justify-end group relative cursor-pointer"
                           >
-                            {/* Hover Tooltip */}
-                            <div className="opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity absolute bottom-full mb-2 z-30 bg-slate-500 text-white text-[11px] rounded-xl px-2.5 py-1.5 whitespace-nowrap shadow-md">
+                            <div
+                              className={`opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity absolute mb-2 z-30 bg-slate-700 text-white text-[11px] rounded-xl px-2.5 py-1.5 whitespace-nowrap shadow-md ${align}`}
+                              style={{ bottom: `${totalPct}%` }}
+                            >
                               <p className="font-semibold">{new Date(pt.ts).toLocaleString()}</p>
                               <p className="mt-0.5">{count} request(s) · {errors} error(s)</p>
                               {count > 0 && <p className="text-slate-200">{fmtMs(pt.avgMs)} avg latency</p>}
                             </div>
 
-                            {/* Bar Stack */}
-                            <div className="w-full flex flex-col justify-end rounded-t-sm overflow-hidden" style={{ height: `${totalPct}%` }}>
-                              {errorPct > 0 && (
-                                <div className="w-full bg-red-500 transition-all" style={{ height: `${errorPct}%` }} />
-                              )}
+                            <div
+                              className="w-full flex flex-col justify-end rounded-t-sm overflow-hidden group-hover:brightness-110"
+                              style={{ height: `${totalPct}%` }}
+                            >
+                              {errorPct > 0 && <div className="w-full bg-red-500" style={{ height: `${(errorPct / totalPct) * 100}%` }} />}
                               {successPct > 0 && (
-                                <div className="w-full bg-gradient-to-t from-main-end to-main-start transition-all" style={{ height: `${successPct}%` }} />
+                                <div
+                                  className="w-full flex-1 bg-gradient-to-t from-main-end to-main-start"
+                                />
                               )}
                             </div>
-                            <span className="text-[9px] text-normal-text mt-1 hidden sm:inline select-none truncate">
-                              {idx % Math.ceil(series.length / 8) === 0 ? timeLabel : ''}
-                            </span>
                           </div>
+                        );
+                      })}
+                    </div>
+                    {/* Time axis on its own row, labels centred under their bucket. */}
+                    <div className="relative mt-1.5 h-4 border-t border-slate-200">
+                      {series.map((pt, idx) => {
+                        const step = Math.ceil(series.length / 6);
+                        if (idx % step !== 0) return null;
+                        const left = ((idx + 0.5) / series.length) * 100;
+                        const edge = left < 6 ? 'translate-x-0' : left > 94 ? '-translate-x-full' : '-translate-x-1/2';
+                        return (
+                          <span
+                            key={pt.ts || idx}
+                            className={`absolute top-1 text-[10px] leading-none text-normal-text whitespace-nowrap select-none ${edge} ${
+                              (idx / step) % 2 ? 'hidden sm:inline' : ''
+                            }`}
+                            style={{ left: `${left}%` }}
+                          >
+                            {new Date(pt.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         );
                       })}
                     </div>
