@@ -665,6 +665,35 @@ feed = parks.changes("2026-10-01T00:00:00Z")
 mistaken for an omitted argument. Typed collections convert list/increment/
 changes results locally through `mapping`.
 
+Graph and GIS methods:
+
+```python
+c.base.graph_upsert_nodes("knowledge", [
+    {"id": "doc:1", "labels": ["Document"], "properties": {"title": "Bão số 12"}},
+])
+c.base.graph_upsert_edges("knowledge", [
+    {"from": "doc:1", "to": "province:hanoi", "type": "MENTIONS"},
+])
+sub = c.base.graph_node("knowledge", "doc:1", depth=2)
+stats = c.base.graph_stats("knowledge")
+
+c.base.geo_upsert("knowledge", [{
+    "id": "p1", "properties": {"name": "Hà Nội"},
+    "geometry": {"type": "Point", "coordinates": [105.85, 21.03]},
+}])
+nearby = c.base.geo_near("knowledge", 21.03, 105.85, 5000)
+extent = c.base.geo_stats("knowledge")
+```
+
+| Graph / GIS method | Purpose |
+|---|---|
+| `graph_upsert_nodes(collection, nodes)` / `graph_upsert_edges(collection, edges)` | upsert graph data |
+| `graph_node(collection, node_id, depth=1, limit=200)` / `graph_query(...)` | bounded traversal |
+| `graph_stats` / `graph_delete_node` | graph stats and cleanup |
+| `geo_upsert(collection, features)` / `geo_list(collection, bbox=, limit=)` | GeoJSON features |
+| `geo_near(collection, lat, lng, radius_meters)` | radius in metres |
+| `geo_within(collection, geometry)` / `geo_stats` / `geo_delete` | containment, extent, cleanup |
+
 ### Synapse Faststore (`c.faststore`)
 
 Redis-backed strings, counters, hashes, lists, sets, sorted sets, scans, batches

@@ -342,12 +342,13 @@ Response:
 ## Vector Search (SynapseBase Vector)
 
 SynapseBase supports vector similarity search over embedding fields with
-metadata filters (hybrid search). **Implementation note (`#29`):** ranking is
-currently computed in the service over the filtered documents; the `pgvector`
-extension/table exists but an ANN index is not used yet. Metadata `where`
-filters are evaluated server-side for `/query`, but vector scoring still reads
-candidate documents. For large vector collections, narrow candidates with
-indexed equality filters (or an external vector index) until ANN pushdown ships.
+metadata filters (hybrid search). The tenant search index
+(`/v1/search`) stores real 384-d inference embeddings in
+`embedding_vec vector(384)` with an HNSW cosine index; `semantic` and `hybrid`
+queries use it and fall back to the local hashed embedding when inference is
+unavailable. The per-collection `/vector-search` endpoint still scores the
+filtered candidate documents in the service, so narrow large collections with
+indexed equality filters when using that endpoint.
 
 ### Declaring vector fields in a mapping
 
@@ -478,6 +479,102 @@ matches, err := articles.VectorSearch(synapseone.BaseVectorSearchOptions{
     Limit:  5,
 })
 ```
+
+## Graph (SynapseBase Graph)
+
+A tenant-scoped property graph stored next to the collection in Postgres. Nodes
+carry labels + JSON properties; edges are typed and reference existing nodes.
+Traversal is a bounded recursive CTE (`depth <= 5`, `limit <= 1000`) so a query
+cannot walk the whole database, and every node/edge is checked against the
+collection's tenant scope.
+
+```bash
+# Upsert nodes
+curl -X POST "$BASE/v1/base/collections/knowledge/graph/nodes" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"nodes":[{"id":"doc:1","labels":["Document"],"properties":{"title":"Bão số 12"}},
+                 {"id":"province:hanoi","labels":["Province"],"properties":{"name":"Hà Nội"}}]}'
+
+# Upsert an edge
+curl -X POST "$BASE/v1/base/collections/knowledge/graph/edges" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"edges":[{"from":"doc:1","to":"province:hanoi","type":"MENTIONS"}]}'
+
+# Bounded traversal
+curl "$BASE/v1/base/collections/knowledge/graph/nodes/doc:1?depth=2&limit=100" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```ts
+await c.base.graphUpsertNodes('knowledge', [
+  { id: 'doc:1', labels: ['Document'], properties: { title: 'Bão số 12' } },
+  { id: 'province:hanoi', labels: ['Province'], properties: { name: 'Hà Nội' } },
+]);
+await c.base.graphUpsertEdges('knowledge', [
+  { from: 'doc:1', to: 'province:hanoi', type: 'MENTIONS' },
+]);
+const sub = await c.base.graphNode('knowledge', 'doc:1', { depth: 2 });
+const matches = await c.base.graphQuery('knowledge', {
+  start: ['doc:1'], depth: 2, edgeTypes: ['MENTIONS'],
+});
+```
+
+```python
+c.base.graph_upsert_nodes("knowledge", [
+    {"id": "doc:1", "labels": ["Document"], "properties": {"title": "Bão số 12"}},
+    {"id": "province:hanoi", "labels": ["Province"], "properties": {"name": "Hà Nội"}},
+])
+c.base.graph_upsert_edges("knowledge", [
+    {"from": "doc:1", "to": "province:hanoi", "type": "MENTIONS"},
+])
+sub = c.base.graph_node("knowledge", "doc:1", depth=2)
+matches = c.base.graph_query("knowledge", ["doc:1"], depth=2, edge_types=["MENTIONS"])
+```
+
+Endpoints: `POST .../graph/nodes`, `POST .../graph/edges`,
+`GET .../graph/nodes/:id?depth=`, `POST .../graph/query`,
+`GET .../graph/stats`, `DELETE .../graph/nodes/:id`.
+
+## GIS (SynapseBase GIS / PostGIS)
+
+GeoJSON features are stored as `geometry(Geometry,4326)` with a GiST index;
+properties stay in `jsonb`. Bounding-box, radius (metres) and polygon
+containment run inside Postgres.
+
+```bash
+curl -X POST "$BASE/v1/base/collections/knowledge/geo/features" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"features":[{"id":"p1","properties":{"name":"Hà Nội"},
+       "geometry":{"type":"Point","coordinates":[105.85,21.03]}}]}'
+
+curl -X POST "$BASE/v1/base/collections/knowledge/geo/near" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"lat":21.03,"lng":105.85,"radiusMeters":5000}'
+```
+
+```ts
+await c.base.geoUpsert('knowledge', [{
+  id: 'p1', properties: { name: 'Hà Nội' },
+  geometry: { type: 'Point', coordinates: [105.85, 21.03] },
+}]);
+const nearby = await c.base.geoNear('knowledge', { lat: 21.03, lng: 105.85, radiusMeters: 5000 });
+const inside = await c.base.geoWithin('knowledge', { geometry: polygon });
+const page = await c.base.geoList('knowledge', { bbox: '105,20,107,22', limit: 200 });
+```
+
+```python
+c.base.geo_upsert("knowledge", [{
+    "id": "p1", "properties": {"name": "Hà Nội"},
+    "geometry": {"type": "Point", "coordinates": [105.85, 21.03]},
+}])
+nearby = c.base.geo_near("knowledge", 21.03, 105.85, 5000)
+inside = c.base.geo_within("knowledge", polygon)
+page = c.base.geo_list("knowledge", bbox="105,20,107,22", limit=200)
+```
+
+Endpoints: `POST .../geo/features`, `GET .../geo/features?bbox=`,
+`POST .../geo/near`, `POST .../geo/within`, `GET .../geo/stats`,
+`DELETE .../geo/features/:id`.
 
 ## Atomic increment
 
