@@ -92,15 +92,15 @@ function matchUpstream(upstreams, key) {
 
 function fmtTime(t) {
   const d = new Date(t);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? '–' : d.toLocaleString();
 }
 
 function fmtRelative(ts) {
-  if (!ts) return '—';
+  if (!ts) return '–';
   const d = new Date(ts);
   const now = Date.now();
   const diff = Math.max(0, Math.floor((now - d.getTime()) / 1000));
-  if (Number.isNaN(diff)) return '—';
+  if (Number.isNaN(diff)) return '–';
   if (diff < 10) return 'just now';
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -109,12 +109,12 @@ function fmtRelative(ts) {
 }
 
 function fmtNumber(n) {
-  if (n == null || Number.isNaN(n)) return '—';
+  if (n == null || Number.isNaN(n)) return '–';
   return Number(n).toLocaleString();
 }
 
 function fmtMs(ms) {
-  if (ms == null || Number.isNaN(ms)) return '—';
+  if (ms == null || Number.isNaN(ms)) return '–';
   if (ms < 1) return '< 1 ms';
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
   return `${Math.round(ms)} ms`;
@@ -626,14 +626,14 @@ export default function Dashboard() {
                 <p className="mt-3 pt-3 border-t border-slate-100 text-[11px] text-normal-text flex items-start gap-1.5">
                   <FontAwesomeIcon icon={faLayerGroup} className="text-main-blue mt-0.5" />
                   <span>
-                    Usage is aggregated across all accounts in this organization — the account picker
+                    Usage is aggregated across all accounts in this organization, the account picker
                     above does not filter request telemetry.
                   </span>
                 </p>
               </Card>
 
               {/* KPI Stat Cards (5 metrics) */}
-              <section aria-label="Usage KPI Metrics" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+              <section aria-label="Usage KPI Metrics" className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4">
                 {/* 1. Total Requests */}
                 <Card className="min-w-0">
                   <div className="flex items-center gap-2 text-normal-text text-xs mb-2 tracking-wide font-medium">
@@ -657,7 +657,7 @@ export default function Dashboard() {
                       <Badge tone={successTone}>{`${successPercent}%`}</Badge>
                     )}
                   </div>
-                  <StatValue loading={summaryLoading} value={totalReq > 0 ? `${successPercent}%` : '—'} />
+                  <StatValue loading={summaryLoading} value={totalReq > 0 ? `${successPercent}%` : '–'} />
                   <div className="mt-2 text-xs text-normal-text truncate">
                     {summaryLoading ? '…' : `${totals.errorRate}% error rate`}
                   </div>
@@ -669,7 +669,7 @@ export default function Dashboard() {
                     <FontAwesomeIcon icon={faClockRotateLeft} className="text-amber-500" />
                     <span>AVG LATENCY</span>
                   </div>
-                  <StatValue loading={summaryLoading} value={totalReq > 0 ? fmtMs(totals.avgMs) : '—'} />
+                  <StatValue loading={summaryLoading} value={totalReq > 0 ? fmtMs(totals.avgMs) : '–'} />
                   <div className="mt-2 text-xs text-normal-text truncate">
                     {summaryLoading ? '…' : `P95: ${fmtMs(totals.p95Ms)}`}
                   </div>
@@ -681,7 +681,7 @@ export default function Dashboard() {
                     <FontAwesomeIcon icon={faUsers} className="text-main-blue" />
                     <span>ACTIVE ACTORS</span>
                   </div>
-                  <StatValue loading={summaryLoading} value={totalReq > 0 ? fmtNumber(totals.uniqueUsers) : '—'} />
+                  <StatValue loading={summaryLoading} value={totalReq > 0 ? fmtNumber(totals.uniqueUsers) : '–'} />
                   <div className="mt-2 text-xs text-normal-text truncate">
                     {summaryLoading ? '…' : `Across ${fmtNumber(totals.uniqueAccounts)} account(s)`}
                   </div>
@@ -920,7 +920,7 @@ export default function Dashboard() {
                               </td>
 
                               <td className="py-3 pr-4 text-normal-text whitespace-nowrap">
-                                {f.lastRequestAt ? fmtRelative(f.lastRequestAt) : '—'}
+                                {f.lastRequestAt ? fmtRelative(f.lastRequestAt) : '–'}
                               </td>
 
                               <td className="py-3 text-right whitespace-nowrap">
@@ -1207,9 +1207,9 @@ export default function Dashboard() {
         <div className="space-y-6">
           {/* Inventory summary cards */}
           {invErr && <Err e={invErr} />}
-          <section aria-label="Inventory" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          <section aria-label="Inventory" className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4">
             {[
-              { icon: faBuilding, label: 'ORGANIZATIONS', value: inv.orgs, to: '/orgs', hint: inv.orgs ? `${inv.orgs} total` : 'None yet — create one' },
+              { icon: faBuilding, label: 'ORGANIZATIONS', value: inv.orgs, to: '/orgs', hint: inv.orgs ? `${inv.orgs} total` : 'None yet, create one' },
               { icon: faBoxes, label: 'ACCOUNTS', value: inv.accounts, to: '/accounts', hint: scope.orgId ? `in ${curOrg?.slug || 'org'}` : 'Pick an organization' },
               { icon: faUsers, label: 'USERS', value: inv.users, to: '/users', hint: scope.orgId ? `in ${curOrg?.slug || 'org'}` : 'Pick an organization' },
               {
@@ -1237,7 +1237,7 @@ export default function Dashboard() {
             ))}
           </section>
 
-          {/* Service health — all 8 platform services probed from /ready */}
+          {/* Service health, all 8 platform services probed from /ready */}
           <section aria-label="Service health" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <Card className="min-w-0">
               <div className="flex items-center justify-between gap-2">
@@ -1250,7 +1250,7 @@ export default function Dashboard() {
               </div>
               <p className="text-xs text-normal-text mt-2 break-all font-mono">{baseUrl()}</p>
               <p className="text-xs text-normal-text mt-1">
-                {readyLoading ? 'Probing /ready…' : readyErr ? 'Gateway is unreachable — is stack up?' : 'Aggregate status of all platform services'}
+                {readyLoading ? 'Probing /ready…' : readyErr ? 'Gateway is unreachable, is stack up?' : 'Aggregate status of all platform services'}
               </p>
               {readyErr && !readyLoading && (
                 <button onClick={loadReady} className="mt-2 text-xs text-main-blue hover:underline">
@@ -1316,18 +1316,18 @@ export default function Dashboard() {
                   <Skeleton className="h-4 w-1/2" />
                 </div>
               ) : runs.total == null ? (
-                <Empty text="Execution stats unavailable — is workflow-service up?" />
+                <Empty text="Execution stats unavailable, is workflow-service up?" />
               ) : (
                 <>
                   <p className="text-sm text-main-text">
                     Active workflows{' '}
-                    <strong className="tabular-nums">{invLoading ? '…' : inv.active ?? '—'}</strong>
-                    <span className="text-normal-text"> of {invLoading ? '…' : inv.workflows ?? '—'}</span>
+                    <strong className="tabular-nums">{invLoading ? '…' : inv.active ?? '–'}</strong>
+                    <span className="text-normal-text"> of {invLoading ? '…' : inv.workflows ?? '–'}</span>
                   </p>
                   <div className="mt-3">
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="text-normal-text">Success rate · last {EXEC_WINDOW} runs</span>
-                      <span className="font-semibold text-main-text tabular-nums">{workflowSuccessRate == null ? '—' : `${workflowSuccessRate}%`}</span>
+                      <span className="font-semibold text-main-text tabular-nums">{workflowSuccessRate == null ? '–' : `${workflowSuccessRate}%`}</span>
                     </div>
                     <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden" role="progressbar">
                       <div
@@ -1374,14 +1374,14 @@ export default function Dashboard() {
                           {(x.status || x.mode || '?').toString().toUpperCase()}
                         </Badge>
                         <span className="font-mono text-main-text whitespace-nowrap">{String(x.id).slice(0, 8)}…</span>
-                        <span className="ml-auto text-normal-text whitespace-nowrap">{x.startedAt ? fmtTime(x.startedAt) : '—'}</span>
+                        <span className="ml-auto text-normal-text whitespace-nowrap">{x.startedAt ? fmtTime(x.startedAt) : '–'}</span>
                       </li>
                     );
                   })}
                 </ul>
               ) : (
                 <Empty
-                  text={runsErr ? 'Could not load executions' : 'No executions yet — execute a workflow to see runs here'}
+                  text={runsErr ? 'Could not load executions' : 'No executions yet, execute a workflow to see runs here'}
                   action={
                     <Link to="/workflows" className="px-3 py-1.5 rounded-2xl bg-background text-xs text-main-text hover:text-main-blue">
                       Open workflows
@@ -1439,7 +1439,7 @@ export default function Dashboard() {
               <Card className="min-w-0">
                 <h3 className="font-semibold text-main-text mb-1">Current Tenant Context</h3>
                 <p className="text-lg font-semibold text-main-text truncate">
-                  {curOrg?.slug || '—'} <span className="text-normal-text font-normal">/ {curAcc?.slug || '—'}</span>
+                  {curOrg?.slug || '–'} <span className="text-normal-text font-normal">/ {curAcc?.slug || '–'}</span>
                 </p>
                 <p className="text-xs text-normal-text mt-1">
                   Changing the picker above re-filters telemetry, security policies, and inventory in real-time.
@@ -1547,21 +1547,21 @@ export default function Dashboard() {
               <div>
                 <span className="text-normal-text block">User / Actor</span>
                 <span className="font-mono text-main-text mt-0.5 block truncate" title={selectedEvent.userEmail || selectedEvent.userId || ''}>
-                  {selectedEvent.userEmail || selectedEvent.userId || '—'}
+                  {selectedEvent.userEmail || selectedEvent.userId || '–'}
                 </span>
               </div>
 
               <div>
                 <span className="text-normal-text block">Tenant Organization</span>
                 <span className="font-mono text-main-text mt-0.5 block truncate">
-                  {selectedEvent.orgId || '—'}
+                  {selectedEvent.orgId || '–'}
                 </span>
               </div>
 
               <div>
                 <span className="text-normal-text block">Account ID</span>
                 <span className="font-mono text-main-text mt-0.5 block truncate">
-                  {selectedEvent.accountId || '—'}
+                  {selectedEvent.accountId || '–'}
                 </span>
               </div>
             </div>

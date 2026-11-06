@@ -107,10 +107,11 @@ function ConsoleLayout({ children }) {
         <main
           className={`transition-all duration-200 ${
             servicesOpen ? 'console-layout-dual' : 'console-layout-single'
-          } px-4 lg:px-6 pt-20 pb-12 min-w-0 sdx-page-enter`}
+          } px-4 lg:px-6 pt-20 pb-8 min-w-0 min-h-screen flex flex-col sdx-page-enter`}
         >
-          <div className="max-w-6xl mx-auto w-full">
-            {children}
+          {/* Column fills the window so the footer sits at the bottom even on short pages. */}
+          <div className="max-w-6xl mx-auto w-full flex-1 flex flex-col">
+            <div className="flex-1">{children}</div>
             <ConsoleFooter />
           </div>
         </main>

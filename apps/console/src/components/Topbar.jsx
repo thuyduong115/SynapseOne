@@ -82,7 +82,7 @@ export default function Topbar({ servicesOpen = true, onToggleServices }) {
       const rt = auth?.refreshToken;
       if (rt) await api.logoutAll(rt);
     } catch {
-      /* best-effort — local session clears regardless */
+      /* best-effort, local session clears regardless */
     }
     logout();
   };

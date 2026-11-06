@@ -16,8 +16,8 @@ export default function ConsoleFooter() {
   const { m } = useI18n();
   const l = m.footer.links;
   return (
-    <footer className="mt-12 flex flex-col gap-3 border-t border-s1-line pt-5 text-xs text-s1-muted sm:flex-row sm:items-center sm:justify-between">
-      <p>{m.footer.bottom}</p>
+    <footer className="mt-12 shrink-0 flex flex-col gap-3 border-t border-s1-line pt-5 text-xs text-s1-muted xl:flex-row xl:items-center xl:justify-between">
+      <p className="whitespace-nowrap">{m.footer.bottom}</p>
       <nav aria-label={m.footer.project} className="flex flex-wrap gap-x-5 gap-y-2">
         <Link to="/api-docs" className={LINK}>{l.apiDocs}</Link>
         <Link to="/docs" className={LINK}>{l.docs}</Link>

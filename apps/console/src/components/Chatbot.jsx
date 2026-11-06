@@ -15,7 +15,7 @@ const METHOD_TONE = { GET: 'blue', POST: 'green', PUT: 'amber', DELETE: 'red' };
 
 // Floating chatbot: guides API testing on the docs page.
 // The agent endpoint (/v1/ai/agent) is intentionally NOT in the public
-// catalog — the bot only explains and pre-fills try-it forms, and it
+// catalog, the bot only explains and pre-fills try-it forms, and it
 // requires a signed-in session (gateway auth: either).
 export default function Chatbot({ auth, headers, onOpenInDocs }) {
   const [open, setOpen] = useState(false);

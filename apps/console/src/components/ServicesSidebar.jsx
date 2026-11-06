@@ -195,7 +195,7 @@ export default function ServicesSidebar({ open = true, onToggle }) {
         </div>
 
         {/* Services List */}
-        <nav className="flex-1 overflow-y-auto space-y-2 pr-1">
+        <nav className="flex-1 overflow-y-auto space-y-2 pr-1 s1-thin-scroll">
           {filtered.length === 0 ? (
             <div className="py-8 text-center text-xs text-normal-text">
               <p>{m.console.noServices} &ldquo;{query}&rdquo;</p>
