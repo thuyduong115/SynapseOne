@@ -30,6 +30,8 @@ import {
 import { parseQuerySpec, applyQuery, parseVectorSearchSpec, QueryError } from './query';
 import { auditMiddleware } from './audit';
 import { searchRecords, indexStatus, replaceCollectionIndex, upsertDocumentIndex, removeDocumentIndex, dropCollectionIndex } from './search';
+import { upsertNodes, upsertEdges, getNode, subgraph, deleteNode, graphStats } from './graph';
+import { upsertFeatures, listFeatures, near, within, deleteFeature, geoStats } from './gis';
 
 dotenv.config();
 const PORT = Number(process.env.PORT || 4005);
@@ -715,6 +717,138 @@ export function createApp(): express.Express {
     }
     // Filter candidates in Postgres where possible (#29); scoring is local.
     res.json(await vectorSearchRec(loaded.collection.id, spec, loaded.collection.mapping, QUERY_SCAN_LIMIT));
+  });
+
+  // ---- graph (property graph per collection) ----
+  app.post('/v1/base/collections/:collection/graph/nodes', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const nodes = (req.body || {}).nodes ?? req.body;
+    try {
+      res.status(201).json({ nodes: await upsertNodes(loaded.collection.id, nodes) });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_graph', message: e.message });
+    }
+  });
+
+  app.post('/v1/base/collections/:collection/graph/edges', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const edges = (req.body || {}).edges ?? req.body;
+    try {
+      res.status(201).json({ edges: await upsertEdges(loaded.collection.id, edges) });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_graph', message: e.message });
+    }
+  });
+
+  app.get('/v1/base/collections/:collection/graph/nodes/:id', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const id = cleanDocId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid_node_id' });
+    const depth = Number(req.query.depth ?? 1);
+    const limit = Number(req.query.limit ?? 200);
+    const result = await subgraph(loaded.collection.id, [id], Number.isFinite(depth) ? depth : 1, [], Number.isFinite(limit) ? limit : 200);
+    const node = await getNode(loaded.collection.id, id);
+    if (!node) return res.status(404).json({ error: 'not_found', message: `node '${id}' not found` });
+    res.json({ node, ...result });
+  });
+
+  app.post('/v1/base/collections/:collection/graph/query', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const b = (req.body || {}) as any;
+    const start = Array.isArray(b.start) ? b.start : b.id ? [b.id] : [];
+    if (!start.length) return res.status(400).json({ error: 'invalid_graph', message: 'start (or id) is required' });
+    const depth = Number(b.depth ?? 1);
+    const limit = Number(b.limit ?? 200);
+    const edgeTypes = Array.isArray(b.edgeTypes) ? b.edgeTypes.map(String) : [];
+    const result = await subgraph(loaded.collection.id, start, Number.isFinite(depth) ? depth : 1, edgeTypes, Number.isFinite(limit) ? limit : 200);
+    res.json(result);
+  });
+
+  app.get('/v1/base/collections/:collection/graph/stats', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    res.json(await graphStats(loaded.collection.id));
+  });
+
+  app.delete('/v1/base/collections/:collection/graph/nodes/:id', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const id = cleanDocId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid_node_id' });
+    const ok = await deleteNode(loaded.collection.id, id);
+    if (!ok) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, id });
+  });
+
+  // ---- GIS (PostGIS geometry per collection) ----
+  app.post('/v1/base/collections/:collection/geo/features', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const features = (req.body || {}).features ?? req.body;
+    try {
+      res.status(201).json({ features: await upsertFeatures(loaded.collection.id, features) });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_geo', message: e.message });
+    }
+  });
+
+  app.get('/v1/base/collections/:collection/geo/features', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const limit = Number(req.query.limit ?? 200);
+    try {
+      const features = await listFeatures(loaded.collection.id, {
+        ...(typeof req.query.bbox === 'string' ? { bbox: req.query.bbox } : {}),
+        limit: Number.isFinite(limit) ? limit : 200,
+      });
+      res.json({ type: 'FeatureCollection', features });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_geo', message: e.message });
+    }
+  });
+
+  app.post('/v1/base/collections/:collection/geo/near', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const b = (req.body || {}) as any;
+    try {
+      const features = await near(loaded.collection.id, Number(b.lat), Number(b.lng), Number(b.radiusMeters ?? b.radius), Number(b.limit ?? 200));
+      res.json({ type: 'FeatureCollection', features });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_geo', message: e.message });
+    }
+  });
+
+  app.post('/v1/base/collections/:collection/geo/within', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const b = (req.body || {}) as any;
+    try {
+      const features = await within(loaded.collection.id, b.geometry, Number(b.limit ?? 200));
+      res.json({ type: 'FeatureCollection', features });
+    } catch (e: any) {
+      res.status(400).json({ error: 'invalid_geo', message: e.message });
+    }
+  });
+
+  app.get('/v1/base/collections/:collection/geo/stats', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    res.json(await geoStats(loaded.collection.id));
+  });
+
+  app.delete('/v1/base/collections/:collection/geo/features/:id', async (req, res) => {
+    const loaded = await loadCollection(req, res);
+    if (!loaded) return;
+    const id = cleanDocId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'invalid_feature_id' });
+    const ok = await deleteFeature(loaded.collection.id, id);
+    if (!ok) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true, id });
   });
 
   // ---- atomic increment ----

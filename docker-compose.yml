@@ -4,7 +4,9 @@ name: synapseone
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./infra/postgres
+    image: synapseone/postgres:16-pgvector-postgis
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-synapseone}
@@ -279,6 +281,8 @@ services:
       BASE_QUERY_SCAN_LIMIT: ${BASE_QUERY_SCAN_LIMIT:-200000}
       AUDIT_TRAIL: ${AUDIT_TRAIL:-true}
       AUDIT_INGEST_URL: ${AUDIT_INGEST_URL:-}
+      INFERENCE_SERVICE_URL: ${INFERENCE_SERVICE_URL:-http://inference:4008}
+      SYNAPSEONE_API_KEY: ${SYNAPSEONE_API_KEY:-}
       SYNAPSEONE_INTERNAL_SECRET: ${SYNAPSEONE_INTERNAL_SECRET:-${SYNAPSEDX_INTERNAL_SECRET:-}}
       HSTS_ENABLED: ${HSTS_ENABLED:-false}
       CORS_ORIGIN: ${CORS_ORIGIN:-}
