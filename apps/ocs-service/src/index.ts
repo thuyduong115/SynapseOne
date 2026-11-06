@@ -356,8 +356,27 @@ export function createApp(backend: Backend = createBackend()): express.Express {
   return app;
 }
 
+function warnProductionStorage(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (process.env.STORAGE_BACKEND !== 's3') return;
+  const endpoint = (process.env.STORAGE_S3_ENDPOINT || '').trim();
+  const isPrivate = /^http:\/\//i.test(endpoint)
+    || /localhost|127\.0\.0\.1|s3:9090|\.internal\b/i.test(endpoint);
+  if (isPrivate) {
+    const banner = '='.repeat(72);
+    console.error(banner);
+    console.error('[storage] WARNING: production object storage is pointed at a private/internal');
+    console.error('[storage] endpoint (test mock or local service): ' + endpoint);
+    console.error('[storage] This is NOT durable production storage. Configure a real S3-compatible');
+    console.error('[storage] endpoint (MinIO / AWS S3 / Cloudflare R2) via STORAGE_S3_ENDPOINT');
+    console.error('[storage] with matching STORAGE_S3_ACCESS_KEY/SECRET_KEY before relying on this.');
+    console.error(banner);
+  }
+}
+
 if (require.main === module) {
   const app = createApp();
+  warnProductionStorage();
   const server = app.listen(PORT, () => console.log(`[ocs] SynapseOCS listening on :${PORT}`));
   const shutdown = () => server.close(() => process.exit(0));
   process.on('SIGTERM', shutdown);
