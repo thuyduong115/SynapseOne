@@ -6,6 +6,23 @@ Format based on Keep a Changelog; versioning follows SemVer.
 ## [Unreleased]
 
 ### Security
+- Tenant webhooks are SSRF-guarded: notification `webhook` deliveries resolve
+  DNS, reject private/loopback/link-local/CGNAT/metadata targets and refuse
+  redirects, so a tenant cannot make Tier-1 call internal services
+  (`notifications-service/src/ssrf.ts`).
+- Internal-only ingest endpoints (`/v1/audit/ingest`, `/v1/usage/ingest`) and
+  `/v1/keys/verify` are no longer reachable through the public gateway; IAM
+  additionally rejects them when an end-user credential or principal header is
+  present, closing audit/usage forgery and key-probing with a tenant token.
+- Dependency security updates: body-parser 1.20.9, follow-redirects 1.16.2,
+  qs 6.16.2, zod 4.6.7 (with the Zod v4 `z.record` migration) and
+  react-router-dom 7.18.5. Production `npm audit` is clean.
+- Notification queue consumer fix: SynapseQueue returns message fields at the
+  top level, so the previous `item.message.payload` read silently acked and
+  dropped every queued notification. Delivery now accepts both shapes.
+
+
+### Security
 - SynapseOCS fails closed when `STORAGE_S3_ENDPOINT` is unset and logs a loud
   production warning when the configured endpoint is a private/`http://` test
   mock (`adobe/s3mock`). Production must point at a real S3-compatible backend
