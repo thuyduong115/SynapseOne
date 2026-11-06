@@ -6,8 +6,11 @@
 SynapseOCS (Object Cloud Storage) is the Tier-1 bucket-aware object store. It
 speaks its own `/v1/ocs` API at the gateway and keeps the original
 `/v1/storage` API as the default-bucket compatibility surface. Bytes live in an
-S3-compatible backend (MinIO, AWS S3 or S3Mock) in production and on a local
-filesystem for development/single-node deployments.
+S3-compatible backend (MinIO / AWS S3 / Cloudflare R2). The bundled S3Mock
+(`adobe/s3mock`) is a **development test double only** — it is not durable
+production storage. In production the service fails closed when
+`STORAGE_S3_ENDPOINT` is unset and logs a loud warning when the endpoint is a
+private/`http://` mock address.
 
 ## Capabilities
 
@@ -86,14 +89,15 @@ tenant/bucket/key/method; hand it only to the intended client. The legacy
 | --- | --- | --- |
 | `STORAGE_BACKEND` | `fs` | `s3` (required by the boot guard) |
 | `STORAGE_FS_ROOT` | `/data` (volume) | — |
-| `STORAGE_S3_ENDPOINT` | `http://s3:9090` | MinIO or AWS S3 HTTPS endpoint |
+| `STORAGE_S3_ENDPOINT` | `http://s3:9090` (dev S3Mock) | real MinIO/AWS S3/R2 HTTPS endpoint |
 | `STORAGE_S3_BUCKET` | `synapseone-core` | dedicated bucket |
 | `STORAGE_S3_ACCESS_KEY` / `_SECRET_KEY` | `test`/`test` | scoped credentials |
 | `STORAGE_S3_REGION` | `us-east-1` | backend region |
 | `STORAGE_S3_PATH_STYLE` | `true` | `false` for AWS virtual-host style |
 
-Compose ships S3Mock for local development. For a MinIO-like local stack, point
-`STORAGE_S3_ENDPOINT` at MinIO and keep `STORAGE_S3_PATH_STYLE=true`. The bucket
+Compose ships S3Mock for local development only; never ship it as production
+storage. For a real deployment point `STORAGE_S3_ENDPOINT` at MinIO/AWS S3/R2
+and keep `STORAGE_S3_PATH_STYLE=true` (MinIO) or `false` (AWS). The bucket
 policy should allow only SynapseOCS credentials to read/write the backend;
 clients should use the OCS API/presigned URLs, not the backend directly.
 

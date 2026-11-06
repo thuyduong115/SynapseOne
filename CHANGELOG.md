@@ -5,6 +5,15 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Security
+- SynapseOCS fails closed when `STORAGE_S3_ENDPOINT` is unset and logs a loud
+  production warning when the configured endpoint is a private/`http://` test
+  mock (`adobe/s3mock`). Production must point at a real S3-compatible backend
+  (MinIO/AWS S3/Cloudflare R2); the bundled mock is documented as dev-only.
+- Compose no longer hardcodes the mock URL as the OCS storage default: the
+  service inherits `S3_ENDPOINT`/`STORAGE_S3_ENDPOINT` and runs with
+  `NODE_ENV=production`, so the boot guard is effective.
+
 ### Added
 - Durable human tasks / wait-for-signal (`/v1/human-tasks`, `humanTask` node)
   with claim, complete/reject/expire, SLA deadlines and exactly-once resume.
