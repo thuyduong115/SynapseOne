@@ -6,6 +6,21 @@ Format based on Keep a Changelog; versioning follows SemVer.
 ## [Unreleased]
 
 ### Added
+- **SynapseBase Graph**: tenant-scoped property graph
+  (`synapseone_base_graph_nodes`/`_edges`) with node/edge upsert, bounded
+  recursive-CTE traversal (depth <= 5) and graph stats.
+- **SynapseBase GIS**: PostGIS `geometry(Geometry,4326)` features with a GiST
+  index plus bbox, radius-metres, polygon and extent queries.
+- **Real vector search**: the search index stores 384-d inference embeddings in
+  `embedding_vec vector(384)` with an HNSW cosine index; hashed 64-d vectors
+  remain the offline fallback.
+- JS and Python SDK graph/GIS methods, released as `@synapseone/sdk@0.9.0`,
+  `@synapseone/cli@0.9.0` and `synapseone-sdk==0.9.0` on npm/PyPI.
+
+### Changed
+- The platform Postgres image is now
+  `synapseone/postgres:16-pgvector-postgis` (pgvector + PostGIS 3) and the
+  initialisation SQL enables both extensions.
 - TLS edge now serves `contribution.synapsecity.sbs` (OpenInfra GISTool data
   contribution portal): HTTPS server block, `/api/` proxy to the backend,
   ACME/HTTP redirect, and the host added to the Let's Encrypt certificate.
