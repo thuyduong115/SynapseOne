@@ -29,7 +29,7 @@
                            │                 │ (OpenRouter)│ JSON-LD
                     ┌───────▼───────┐      ┌──▼─────────┐ ┌─▼──────────┐
                     │ Postgres/Redis│      │  Postgres  │ │  Postgres  │
-                    │ S3Mock (S3)   │      │ workflows+ │ │ lds_*      │
+                    │ SeaweedFS(S3) │      │ workflows+ │ │ lds_*      │
                     └───────────────┘      │ executions │ │ tables     │
                                            └────────────┘ └────────────┘
 ```
@@ -56,7 +56,7 @@ Data services (same gateway, same tenant model):
 - **Tokens**: short-lived JWT (Bearer), rotating opaque refresh tokens, long-lived
   `synapseone_...` API keys (hash + prefix), service accounts for workloads.
 - **Core data cluster**: Postgres 16 (source of truth), Redis (cache/rate-limit/session,
-  and the Faststore/Queue backends), S3Mock (S3-compatible object storage, bucket
+  and the Faststore/Queue backends), SeaweedFS (S3-compatible object storage, bucket
   `synapseone-core`; the storage service exposes it at `/v1/storage`; swap to
   MinIO/real S3 in production via `STORAGE_S3_*`).
 - **Workflow**: local built-in engine (Apache-2.0, no external dependency); `workflow-service` owns

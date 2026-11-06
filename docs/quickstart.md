@@ -117,7 +117,7 @@ without those env vars they fall back to per-process memory (dev only).
 
 ## 7. Object storage (S3)
 
-- S3 endpoint `http://localhost:9090` (S3Mock, S3-compatible), bucket `synapseone-core`
+- S3 endpoint `http://localhost:9090` (bundled SeaweedFS, S3-compatible), bucket `synapseone-core`
   auto-created by the `s3-init` service.
 - Try it: `aws --endpoint-url http://localhost:9090 s3 ls` (keys in `.env`:
   `S3_ACCESS_KEY` / `S3_SECRET_KEY`).

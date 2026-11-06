@@ -33,29 +33,43 @@ services:
       retries: 5
     networks: [synapseone-net]
 
-  # Object storage: S3Mock is a DEV-ONLY test double. Production MUST point
-  # STORAGE_S3_ENDPOINT/S3_ENDPOINT at a real S3-compatible backend (MinIO,
-  # AWS S3, Cloudflare R2). OCS fails closed when the endpoint is unset and
-  # logs a loud warning when production points at this private http mock.
+  # Object storage: SeaweedFS (Apache-2.0) with its S3 API on :9090. Data
+  # persists in the `seaweeddata` volume; the host port is loopback-only and
+  # operators can point OCS at MinIO / AWS S3 / R2 by setting
+  # STORAGE_S3_ENDPOINT (+ credentials) without touching the code.
   s3:
-    image: adobe/s3mock:latest
+    image: chrislusf/seaweedfs:4.48
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        printf '{"identities":[{"name":"synapseone","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}'
+        "$$S3_ADMIN_ACCESS_KEY" "$$S3_ADMIN_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data -ip=s3 -ip.bind=0.0.0.0 -volume.max=0
+        -master.volumeSizeLimitMB=1024 -s3 -s3.port=9090 -s3.config=/tmp/s3.json
     environment:
-      COM_ADOBE_TESTING_S3MOCK_STORE_FILESYSTEM_ROOT: /data
+      S3_ADMIN_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-${S3_ACCESS_KEY:-test}}
+      S3_ADMIN_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:-${S3_SECRET_KEY:-test}}
     volumes:
-      - s3data:/data
+      - seaweeddata:/data
     ports:
-      - "${S3_HOST_PORT:-9090}:9090"
+      # Loopback only: OCS reaches it over the Docker network.
+      - "${S3_HOST_PORT:-127.0.0.1:9090}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/cluster/status >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
     networks: [synapseone-net]
 
   s3-init:
     image: amazon/aws-cli:latest
-    entrypoint: ["sh", "-c", "for i in $(seq 1 30); do aws --endpoint-url http://s3:9090 --region $${AWS_DEFAULT_REGION:-us-east-1} s3 mb s3://$${S3_BUCKET:-synapseone-core} && break || sleep 2; done; aws --endpoint-url http://s3:9090 --region $${AWS_DEFAULT_REGION:-us-east-1} s3 ls || true"]
+    entrypoint: ["sh", "-c", "for i in $(seq 1 30); do aws --endpoint-url http://s3:9090 s3api head-bucket --bucket $${S3_BUCKET} >/dev/null 2>&1 && break; aws --endpoint-url http://s3:9090 s3 mb s3://$${S3_BUCKET} && break; sleep 2; done; aws --endpoint-url http://s3:9090 s3 ls || true"]
     environment:
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-test}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-test}
-      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
-      S3_BUCKET: ${S3_BUCKET:-synapseone-core}
+      AWS_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY:-${S3_ACCESS_KEY:-test}}
+      AWS_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_KEY:-${S3_SECRET_KEY:-test}}
+      AWS_DEFAULT_REGION: ${STORAGE_S3_REGION:-${S3_REGION:-us-east-1}}
+      S3_BUCKET: ${STORAGE_S3_BUCKET:-${S3_BUCKET:-synapseone-core}}
     depends_on:
       - s3
     networks: [synapseone-net]
@@ -584,10 +598,10 @@ services:
     networks: [synapseone-net]
 
 volumes:
+  seaweeddata:
   pgdata:
   redisdata:
   storagedata:
-  s3data:
   prometheusdata:
 
 networks:

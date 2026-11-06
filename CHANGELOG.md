@@ -5,6 +5,13 @@ Format based on Keep a Changelog; versioning follows SemVer.
 
 ## [Unreleased]
 
+### Changed
+- The bundled object store is now **SeaweedFS** (real S3 semantics, persistent
+  `seaweeddata` volume, loopback-only host port) instead of the `adobe/s3mock`
+  test double. SynapseOCS, the backup sidecar and the `s3-init` bucket probe
+  keep the same `http://s3:9090` endpoint and `STORAGE_S3_*` credentials, so an
+  external MinIO/AWS S3/R2 backend remains a pure env swap.
+
 ### Security
 - Tenant webhooks are SSRF-guarded: notification `webhook` deliveries resolve
   DNS, reject private/loopback/link-local/CGNAT/metadata targets and refuse

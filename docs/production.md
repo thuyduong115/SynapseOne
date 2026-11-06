@@ -50,7 +50,7 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
 
 - [ ] Postgres: durable volume + periodic backups (`pg_dump`, see `docs/troubleshooting.md`).
 - [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials and
-      replace S3Mock with MinIO/real S3 (`docs/object-storage.md`). Set
+      point storage at MinIO/real S3 if you do not want the bundled SeaweedFS (`docs/object-storage.md`). Set
       `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.
 - [ ] Notifications: set `DATABASE_URL`, `NOTIFICATIONS_QUEUE_URL`,
       `NOTIFICATIONS_EMAIL_RELAY_URL`/`_SMS_`/`_PUSH_` as needed; the service
