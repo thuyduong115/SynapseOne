@@ -210,6 +210,91 @@ function queryString(params: Record<string, unknown>): string {
 export class BaseService {
   constructor(private readonly http: HttpClient) {}
 
+  // ---- graph (property graph per collection) ----
+  graphUpsertNodes(collection: string, nodes: unknown[]): Promise<{ nodes: unknown[] }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/graph/nodes`, {
+      method: 'POST',
+      body: JSON.stringify({ nodes }),
+    });
+  }
+
+  graphUpsertEdges(collection: string, edges: unknown[]): Promise<{ edges: unknown[] }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/graph/edges`, {
+      method: 'POST',
+      body: JSON.stringify({ edges }),
+    });
+  }
+
+  graphNode(
+    collection: string,
+    id: string,
+    opts: { depth?: number; limit?: number } = {},
+  ): Promise<{ node: unknown; nodes: unknown[]; edges: unknown[]; next?: boolean }> {
+    return this.http.req(
+      `/v1/base/collections/${encodeURIComponent(collection)}/graph/nodes/${encodeURIComponent(id)}${queryString({ depth: opts.depth, limit: opts.limit })}`,
+    );
+  }
+
+  graphQuery(
+    collection: string,
+    opts: { start: string[]; depth?: number; limit?: number; edgeTypes?: string[] },
+  ): Promise<{ nodes: unknown[]; edges: unknown[]; next?: boolean }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/graph/query`, {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    });
+  }
+
+  graphStats(collection: string): Promise<{ nodes: number; edges: number }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/graph/stats`);
+  }
+
+  graphDeleteNode(collection: string, id: string): Promise<{ ok: boolean; id: string }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/graph/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  // ---- GIS (PostGIS GeoJSON per collection) ----
+  geoUpsert(collection: string, features: unknown[]): Promise<{ features: unknown[] }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/geo/features`, {
+      method: 'POST',
+      body: JSON.stringify({ features }),
+    });
+  }
+
+  geoList(collection: string, opts: { bbox?: string; limit?: number } = {}): Promise<{ type: string; features: unknown[] }> {
+    return this.http.req(
+      `/v1/base/collections/${encodeURIComponent(collection)}/geo/features${queryString({ bbox: opts.bbox, limit: opts.limit })}`,
+    );
+  }
+
+  geoNear(
+    collection: string,
+    opts: { lat: number; lng: number; radiusMeters: number; limit?: number },
+  ): Promise<{ type: string; features: unknown[] }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/geo/near`, {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    });
+  }
+
+  geoWithin(
+    collection: string,
+    opts: { geometry: Record<string, unknown>; limit?: number },
+  ): Promise<{ type: string; features: unknown[] }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/geo/within`, {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    });
+  }
+
+  geoStats(collection: string): Promise<{ features: number; extent?: unknown }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/geo/stats`);
+  }
+
+  geoDelete(collection: string, id: string): Promise<{ ok: boolean; id: string }> {
+    return this.http.req(`/v1/base/collections/${encodeURIComponent(collection)}/geo/features/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   /** Bind a collection name (plus optional model/mapping) for typed use. */
   collection<T = Record<string, unknown>>(name: string, opts: BaseCollectionOptions<T> = {}): BaseCollection<T> {
     return new BaseCollection<T>(this, name, opts);

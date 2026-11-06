@@ -12,6 +12,7 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- Drizzle stores each service's migration journal here. Create it up front so
 -- concurrent first-boot migrations don't race on schema creation.
