@@ -67,6 +67,37 @@ export const en = {
     selfHostTitle: 'Self-host in 3 commands',
     selfHostEnv: '# then replace every *_change_me_* secret',
     selfHostLogin: '# sign in: demo@acme.local / org acme',
+    flowTitle: 'Where a request goes',
+    flowLead:
+      'Every client calls one API gateway. The gateway checks who is calling, then routes the request to the right service, which only works with that tenant’s data.',
+    flow: [
+      { title: 'Client', text: 'Your app, an SDK, the CLI or the Console.' },
+      { title: 'API gateway', text: 'Checks the JWT or API key, applies rate limits, stamps a request id and the caller identity.' },
+      { title: 'Services', text: 'Each service does one job and shares the same identity and tenant scope.' },
+      { title: 'Storage', text: 'Self-hosted, the data stays on your own servers.' },
+    ],
+    clientsTitle: 'One task, five ways to call it',
+    clientsLead:
+      'Sign in, then write a document to SynapseBase. The JavaScript, Python and Go SDKs and the CLI all call the same gateway API.',
+    clientsNote: 'The example assumes the parks collection already exists.',
+    clientsDocs: 'Read the SDK guides',
+    builtTitle: 'Running on SynapseOne',
+    builtLead:
+      'Products in the Synapse family run on SynapseOne, with no database, queue or identity store of their own.',
+    layers: {
+      apps: 'Tier 3 · Apps',
+      shared: 'Tier 2 · Shared capabilities',
+      platform: 'Tier 1 · Platform',
+    },
+    built: {
+      city: { text: 'City infrastructure: asset map, citizen incident reports, open data API.' },
+      sos: { text: 'Emergency operations: hazard alerts, responder dispatch, public emergency map.' },
+      yours: { name: 'Your app', text: 'Build on SynapseDX, or call @synapseone/sdk directly.' },
+      dx: { text: 'Shared capabilities for organisations and open data. All storage, identity checks and messaging go through @synapseone/sdk.' },
+      one: { text: 'Identity, API gateway, data, queues, workflows and AI for every tier above.', here: 'This site' },
+    },
+    usesLabel: 'SynapseOne services in use',
+    visit: 'Visit',
     featuresHeading: 'What the platform includes',
     features: [
       {

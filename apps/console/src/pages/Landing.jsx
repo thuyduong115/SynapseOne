@@ -10,6 +10,7 @@ import { Bot, KeyRound, Layers, ShieldCheck, WandSparkles, Zap } from 'lucide-re
 import PublicHeader from '../components/PublicHeader.jsx';
 import PublicFooter from '../components/PublicFooter.jsx';
 import FeatureGrid from '../components/FeatureGrid.jsx';
+import { BuiltOn, ClientTabs, RequestFlow } from '../components/HomeSections.jsx';
 import Terminal from '../components/Terminal.jsx';
 import { PRIMARY_BTN, SECONDARY_BTN } from '../components/public-styles.js';
 import { appDashboardUrl, isCanonicalAppHost } from '../lib/site.js';
@@ -66,6 +67,10 @@ export default function Landing() {
           <h2 className="text-2xl font-semibold tracking-tight">{t.featuresHeading}</h2>
           <FeatureGrid items={t.features} icons={FEATURE_ICONS} />
         </section>
+
+        <RequestFlow />
+        <ClientTabs />
+        <BuiltOn />
 
         <section className="mt-24 grid gap-8 lg:grid-cols-[1fr_1.6fr] lg:items-center">
           <div className="min-w-0">

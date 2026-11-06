@@ -67,6 +67,37 @@ export const vi = {
     selfHostTitle: 'Tự triển khai với 3 lệnh',
     selfHostEnv: '# sau đó thay mọi secret *_change_me_*',
     selfHostLogin: '# đăng nhập: demo@acme.local / tổ chức acme',
+    flowTitle: 'Một request đi qua những đâu',
+    flowLead:
+      'Mọi client gọi vào một cổng API duy nhất. Cổng xác thực người gọi rồi chuyển request tới đúng dịch vụ, và dịch vụ chỉ làm việc với dữ liệu của tenant đó.',
+    flow: [
+      { title: 'Client', text: 'Ứng dụng của bạn, SDK, CLI hoặc Console.' },
+      { title: 'Cổng API', text: 'Kiểm tra JWT hoặc khóa API, giới hạn tần suất, gắn mã request và danh tính người gọi.' },
+      { title: 'Dịch vụ', text: 'Mỗi dịch vụ lo một việc, dùng chung danh tính và phạm vi tenant.' },
+      { title: 'Lưu trữ', text: 'Khi tự cài đặt, dữ liệu nằm trên máy chủ của bạn.' },
+    ],
+    clientsTitle: 'Một tác vụ, năm cách gọi',
+    clientsLead:
+      'Đăng nhập rồi ghi một tài liệu vào SynapseBase. SDK JavaScript, Python, Go và CLI cùng gọi một API qua cổng.',
+    clientsNote: 'Ví dụ giả định collection parks đã có sẵn.',
+    clientsDocs: 'Xem hướng dẫn SDK',
+    builtTitle: 'Đang chạy trên SynapseOne',
+    builtLead:
+      'Các sản phẩm trong hệ sinh thái Synapse chạy trên SynapseOne, không tự dựng cơ sở dữ liệu, hàng đợi hay kho định danh riêng.',
+    layers: {
+      apps: 'Tầng 3 · Ứng dụng',
+      shared: 'Tầng 2 · Năng lực dùng chung',
+      platform: 'Tầng 1 · Nền tảng',
+    },
+    built: {
+      city: { text: 'Hạ tầng đô thị: bản đồ tài sản, báo cáo sự cố của người dân, API dữ liệu mở.' },
+      sos: { text: 'Điều hành khẩn cấp: cảnh báo thiên tai, điều phối ứng cứu, bản đồ khẩn cấp công khai.' },
+      yours: { name: 'Ứng dụng của bạn', text: 'Xây trên SynapseDX, hoặc gọi thẳng @synapseone/sdk.' },
+      dx: { text: 'Năng lực dùng chung cho tổ chức và dữ liệu mở. Mọi lưu trữ, xác thực danh tính và nhắn tin đều đi qua @synapseone/sdk.' },
+      one: { text: 'Định danh, cổng API, dữ liệu, hàng đợi, quy trình và AI cho mọi tầng phía trên.', here: 'Trang này' },
+    },
+    usesLabel: 'Dịch vụ SynapseOne đang dùng',
+    visit: 'Mở trang',
     featuresHeading: 'Thành phần nền tảng',
     features: [
       {
