@@ -52,9 +52,9 @@ export default function Sidebar() {
       className="fixed left-3 xl:left-5 top-0 h-screen w-64 xl:w-72 hidden lg:flex flex-col items-center z-30"
     >
       <Link to="/">
-        <h1 className="my-6 mt-8 ml-2 whitespace-nowrap text-xl xl:text-2xl font-semibold bg-gradient-to-b from-main-start to-main-end bg-clip-text text-transparent">
+        <p className="my-6 mt-8 ml-2 whitespace-nowrap text-xl xl:text-2xl font-semibold bg-gradient-to-b from-main-start to-main-end bg-clip-text text-transparent">
           {m.console.title}
-        </h1>
+        </p>
       </Link>
       <nav className="w-full bg-white rounded-3xl py-4 px-3 flex flex-col text-normal-text shadow-md max-h-[82vh] overflow-y-auto s1-thin-scroll">
         <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">

@@ -1084,6 +1084,7 @@ export default function Dashboard() {
                         type="button"
                         disabled={!hasPrev || eventsLoading}
                         onClick={() => setOffset(Math.max(0, offset - EVENTS_LIMIT))}
+                        aria-label="Previous page"
                         className="px-2.5 py-1 rounded-xl bg-background text-main-text hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed text-xs"
                       >
                         <FontAwesomeIcon icon={faChevronLeft} />
@@ -1092,6 +1093,7 @@ export default function Dashboard() {
                         type="button"
                         disabled={!hasNext || eventsLoading}
                         onClick={() => setOffset(offset + EVENTS_LIMIT)}
+                        aria-label="Next page"
                         className="px-2.5 py-1 rounded-xl bg-background text-main-text hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed text-xs"
                       >
                         <FontAwesomeIcon icon={faChevronRight} />

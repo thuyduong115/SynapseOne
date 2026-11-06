@@ -10,13 +10,14 @@ import { useI18n } from '../lib/i18n-context.js';
 import { appDashboardUrl, isCanonicalAppHost } from '../lib/site.js';
 
 const REPO = 'https://github.com/vku-open-source-2026/SynapseOne';
-const linkClass = 'text-sm text-s1-muted hover:text-s1-accent transition-colors';
+// py-1 gives each link a finger-sized tap area on phones without changing the look.
+const linkClass = 'inline-block py-1 text-sm text-s1-muted hover:text-s1-accent transition-colors';
 
 function Column({ title, children }) {
   return (
     <div>
       <h3 className="text-sm font-semibold text-s1-fg">{title}</h3>
-      <ul className="mt-3 space-y-2">
+      <ul className="mt-2 space-y-0.5">
         {React.Children.map(children, (c) => (
           <li>{c}</li>
         ))}

@@ -132,33 +132,35 @@ export const en = {
     title: 'SynapseOne, the open Tier-1 PaaS',
     intro:
       'SynapseOne is an Apache-2.0 platform that gives products one API for identity, authorization, data, workflows, events, files, notifications and AI. It is built by the VKU.VIC team and designed to be consumed by higher tiers: SynapseDX capabilities and city-scale products use the same public HTTPS gateway.',
-    featuresHeading: 'Features',
-    features: [
-      {
-        title: 'AWS-style IAM',
-        text: 'Organization → Account → User → Role → JSON policy, enforced per-route scopes, authorize simulator and a mutation audit trail.',
-      },
-      {
-        title: 'Identity',
-        text: 'Password lifecycle, rotating refresh tokens, API keys, service accounts, delegated user-token exchange and OIDC SSO.',
-      },
-      {
-        title: 'API gateway',
-        text: 'One public entry point with JWT/API-key auth, per-client limits, principal propagation, tracing and aggregate readiness.',
-      },
-      {
-        title: 'Data plane',
-        text: 'Postgres, Redis, tenant-scoped object storage, document DB, cache/KV, queue and event stream, all behind the same API.',
-      },
-      {
-        title: 'Workflows',
-        text: 'Built-in DAG engine: versioned templates, sandboxed code, webhooks, cron triggers, executions and a visual editor.',
-      },
-      {
-        title: 'AI + clients',
-        text: 'Inference with streaming and token metering, notification delivery, TypeScript/Python/Go SDKs, a CLI and this Console.',
-      },
+    whyTitle: 'Why SynapseOne exists',
+    why: [
+      'Every product needs the same parts: sign-in, permissions, a public API, somewhere to store data, queues and automated workflows. Teams usually rebuild them, or rent closed cloud services and then struggle to move their data elsewhere.',
+      'SynapseOne puts those parts into one open-source platform you can run on your own servers, so products like SynapseCity can focus on their own domain.',
     ],
+    whyProblem: 'The problem',
+    whyAnswer: 'What SynapseOne does',
+    principlesTitle: 'Principles',
+    principles: [
+      { title: 'Open from code to licence', text: 'Source is Apache-2.0. CI checks the licence of every dependency and blocks copyleft ones.' },
+      { title: 'Open standards', text: 'Sign-in through OIDC (Authentik, Keycloak), linked data in NGSI-LD and JSON-LD, S3-compatible storage, REST APIs that return JSON.' },
+      { title: 'Self-hosting first', text: 'The whole stack runs with Docker Compose. cloud.synapseone.space is deployed exactly that way.' },
+      { title: 'Tenant isolation', text: 'Every service scopes data to an organisation or account. The gateway stamps the verified identity and drops any identity headers a client sends itself.' },
+    ],
+    timelineTitle: 'Releases',
+    timelineLead: 'Summarised from the project CHANGELOG.',
+    timeline: [
+      { version: 'v0.1', date: 'Oct 6, 2026', text: 'First Tier-1 release: API gateway, AWS-style IAM, tokens, API keys and the JavaScript, Python and Go SDKs.' },
+      { version: 'v0.2', date: 'Oct 6, 2026', text: 'Admin Console and the synapseone CLI.' },
+      { version: 'v0.4', date: 'Oct 20, 2026', text: 'SynapseLDS for NGSI-LD linked data; a built-in workflow engine replaces n8n.' },
+      { version: 'v0.5', date: 'Oct 21, 2026', text: 'Three data services, SynapseBase, Faststore and SynapseQueue, plus usage analytics.' },
+      { version: 'v0.6', date: 'Oct 21, 2026', text: 'Synapse Inference, SynapseStream and SDKs covering the whole API.' },
+      { version: 'v0.7', date: 'Oct 31, 2026', text: 'SynapseDX renamed to SynapseOne; v0.7.1 bug fixes on Nov 4.' },
+    ],
+    unreleasedLabel: 'In progress',
+    unreleasedText: 'TOTP two-factor sign-in, lockout after repeated wrong attempts, SeaweedFS object storage, automatic backups and the new Console.',
+    nextLabel: 'Up next',
+    next: ['Enforce API key scopes at the gateway', 'Load testing for the API gateway', 'Helm chart and a production operations guide'],
+    roadmap: 'See the roadmap',
     openSourceTitle: 'Open source',
     openSourceText:
       "All platform code is Apache-2.0 with per-source SPDX headers and third-party attribution. Contributions follow the repository's CODE_OF_CONDUCT and GOVERNANCE documents.",
@@ -170,15 +172,6 @@ export const en = {
       pypi: 'PyPI SDK',
       license: 'License (Apache-2.0)',
     },
-    tiersTitle: 'How the tiers fit',
-    tierStack: [
-      { name: 'SynapseCity / SynapseCitySOS', tier: 'Tier 3' },
-      { name: 'SynapseDX capabilities API/SDK', tier: 'Tier 2' },
-      { name: 'SynapseOne', tier: 'Tier 1' },
-    ],
-    tierLinks: ['public HTTPS', '@synapseone/sdk'],
-    tiersText:
-      'Tier 2 delegates user identity with the token-exchange endpoint and persists through Tier-1 data capabilities. Tiers 2 and 3 never share databases or service ports with Tier 1.',
     teamTitle: 'Team',
     teamLead: 'The people who build and maintain SynapseOne (VKU.VIC)',
     partnersTitle: 'Supported by',

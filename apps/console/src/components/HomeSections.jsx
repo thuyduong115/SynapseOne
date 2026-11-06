@@ -240,6 +240,7 @@ export function ClientTabs() {
             <button
               type="button"
               onClick={copy}
+              aria-label={lang === 'vi' ? 'Sao chép' : 'Copy'}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-s1-code-muted transition hover:bg-white/10 hover:text-white"
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}

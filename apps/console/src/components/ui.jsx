@@ -19,7 +19,7 @@ export function PageTitle({ title, sub, right }) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
       <div className="min-w-0">
-        <h2 className="text-xl sm:text-2xl font-semibold text-main-text truncate">{title}</h2>
+        <h1 className="text-xl sm:text-2xl font-semibold text-main-text truncate">{title}</h1>
         {sub && <p className="text-normal-text text-sm mt-1">{sub}</p>}
       </div>
       {right && <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">{right}</div>}

@@ -132,33 +132,35 @@ export const vi = {
     title: 'SynapseOne, nền tảng PaaS Tầng 1 mở',
     intro:
       'SynapseOne là nền tảng Apache-2.0 cung cấp cho sản phẩm một API duy nhất cho định danh, phân quyền, dữ liệu, quy trình, sự kiện, tệp, thông báo và AI. Nền tảng do nhóm VKU.VIC xây dựng và được thiết kế để các tầng trên sử dụng: năng lực SynapseDX và các sản phẩm quy mô đô thị dùng chung cổng HTTPS công khai.',
-    featuresHeading: 'Tính năng',
-    features: [
-      {
-        title: 'IAM kiểu AWS',
-        text: 'Tổ chức → Tài khoản → Người dùng → Vai trò → Chính sách JSON, scope áp dụng theo từng route, trình mô phỏng authorize và nhật ký mọi thay đổi.',
-      },
-      {
-        title: 'Định danh',
-        text: 'Vòng đời mật khẩu, refresh token xoay vòng, khóa API, tài khoản dịch vụ, đổi token ủy quyền cho người dùng và SSO qua OIDC.',
-      },
-      {
-        title: 'Cổng API',
-        text: 'Một điểm vào công khai với xác thực JWT/khóa API, giới hạn theo client, truyền danh tính, tracing và kiểm tra sẵn sàng tổng hợp.',
-      },
-      {
-        title: 'Tầng dữ liệu',
-        text: 'Postgres, Redis, lưu trữ đối tượng theo tenant, CSDL tài liệu, cache/KV, hàng đợi và luồng sự kiện, tất cả sau cùng một API.',
-      },
-      {
-        title: 'Quy trình',
-        text: 'Engine DAG tích hợp: mẫu có phiên bản, code chạy trong sandbox, webhook, trigger cron, lịch sử thực thi và trình soạn thảo trực quan.',
-      },
-      {
-        title: 'AI và client',
-        text: 'Suy luận có streaming và đo token, gửi thông báo, SDK TypeScript/Python/Go, CLI và Console này.',
-      },
+    whyTitle: 'Vì sao có SynapseOne',
+    why: [
+      'Sản phẩm nào cũng cần những phần giống nhau: đăng nhập, phân quyền, một API công khai, nơi lưu dữ liệu, hàng đợi và quy trình tự động. Mỗi đội thường tự dựng lại chúng, hoặc thuê dịch vụ đám mây đóng rồi khó mang dữ liệu đi nơi khác.',
+      'SynapseOne gom các phần đó vào một nền tảng mã nguồn mở chạy được trên máy chủ của chính bạn. Nhờ vậy những sản phẩm như SynapseCity chỉ cần tập trung vào nghiệp vụ của mình.',
     ],
+    whyProblem: 'Vấn đề',
+    whyAnswer: 'SynapseOne làm gì',
+    principlesTitle: 'Nguyên tắc',
+    principles: [
+      { title: 'Mở từ mã đến giấy phép', text: 'Mã nguồn theo Apache-2.0. CI kiểm tra giấy phép của mọi thư viện và chặn thư viện copyleft.' },
+      { title: 'Theo chuẩn mở', text: 'Đăng nhập qua OIDC (Authentik, Keycloak), dữ liệu liên kết theo NGSI-LD và JSON-LD, lưu trữ tương thích S3, API REST trả JSON.' },
+      { title: 'Tự cài đặt trước tiên', text: 'Cả hệ thống chạy bằng Docker Compose. Bản tại cloud.synapseone.space cũng được triển khai theo đúng cách này.' },
+      { title: 'Tách biệt theo tenant', text: 'Mọi dịch vụ giới hạn dữ liệu theo tổ chức hoặc tài khoản. Cổng API gắn danh tính đã xác thực và bỏ mọi header danh tính do client tự gửi.' },
+    ],
+    timelineTitle: 'Các phiên bản',
+    timelineLead: 'Tóm tắt từ CHANGELOG của dự án.',
+    timeline: [
+      { version: 'v0.1', date: '06/10/2026', text: 'Bản đầu tiên của Tầng 1: cổng API, IAM kiểu AWS, token, khóa API và SDK JavaScript, Python, Go.' },
+      { version: 'v0.2', date: '06/10/2026', text: 'Console quản trị và CLI synapseone.' },
+      { version: 'v0.4', date: '20/10/2026', text: 'SynapseLDS cho dữ liệu liên kết NGSI-LD; engine quy trình tích hợp thay cho n8n.' },
+      { version: 'v0.5', date: '21/10/2026', text: 'Ba dịch vụ dữ liệu SynapseBase, Faststore, SynapseQueue và thống kê sử dụng.' },
+      { version: 'v0.6', date: '21/10/2026', text: 'Synapse Inference, SynapseStream và SDK phủ toàn bộ API.' },
+      { version: 'v0.7', date: '31/10/2026', text: 'Đổi tên SynapseDX thành SynapseOne; bản v0.7.1 sửa lỗi ngày 04/11.' },
+    ],
+    unreleasedLabel: 'Đang phát triển',
+    unreleasedText: 'Xác thực hai lớp TOTP, khóa đăng nhập khi nhập sai nhiều lần, lưu trữ đối tượng SeaweedFS, sao lưu tự động và giao diện Console mới.',
+    nextLabel: 'Tiếp theo',
+    next: ['Áp dụng scope của khóa API ngay tại cổng', 'Kiểm thử tải cho cổng API', 'Helm chart và hướng dẫn vận hành production'],
+    roadmap: 'Xem lộ trình',
     openSourceTitle: 'Mã nguồn mở',
     openSourceText:
       'Toàn bộ mã nền tảng theo Apache-2.0, có header SPDX trong từng tệp nguồn và ghi nhận thư viện bên thứ ba. Đóng góp tuân theo CODE_OF_CONDUCT và GOVERNANCE của kho mã.',
@@ -170,15 +172,6 @@ export const vi = {
       pypi: 'SDK trên PyPI',
       license: 'Giấy phép (Apache-2.0)',
     },
-    tiersTitle: 'Các tầng kết nối thế nào',
-    tierStack: [
-      { name: 'SynapseCity / SynapseCitySOS', tier: 'Tầng 3' },
-      { name: 'API/SDK năng lực SynapseDX', tier: 'Tầng 2' },
-      { name: 'SynapseOne', tier: 'Tầng 1' },
-    ],
-    tierLinks: ['HTTPS công khai', '@synapseone/sdk'],
-    tiersText:
-      'Tầng 2 ủy quyền định danh người dùng qua endpoint đổi token và lưu dữ liệu qua các năng lực dữ liệu của Tầng 1. Tầng 2 và Tầng 3 không bao giờ dùng chung cơ sở dữ liệu hay cổng dịch vụ với Tầng 1.',
     teamTitle: 'Đội ngũ',
     teamLead: 'Những người xây dựng và duy trì SynapseOne (VKU.VIC)',
     partnersTitle: 'Đơn vị đồng hành',

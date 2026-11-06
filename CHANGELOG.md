@@ -19,6 +19,12 @@ Format based on Keep a Changelog; versioning follows SemVer.
   gateway, services, storage), one task in five clients (JavaScript, Python, Go, CLI
   and cURL tabs) and the products running on SynapseOne as a tier stack (SynapseCity
   and SynapseCitySOS on SynapseDX), with room for more Tier-3 apps.
+- About focuses on the project instead of repeating Home: why SynapseOne exists
+  (problem and answer), four principles with where each shows up in the repo, a
+  release timeline from this CHANGELOG with in-progress and roadmap items, larger
+  team cards and the partner list. The feature grid and tier stack moved to Home.
+- Accessibility: console pages have a real h1, icon-only buttons (code copy, request
+  pager) have labels, and footer links have a larger tap area on phones.
 - Docs and API Docs use one docs layout: section navigation on the left, an
   "On this page" list, dark code panels with a copy button, method labels and
   translated page chrome. API Docs gains a filter, highlighted path parameters and a

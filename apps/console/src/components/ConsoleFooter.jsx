@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom';
 import { useI18n } from '../lib/i18n-context.js';
 
 const REPO = 'https://github.com/vku-open-source-2026/SynapseOne';
-const LINK = 'whitespace-nowrap hover:text-s1-accent transition-colors';
+const LINK = 'inline-block py-1 whitespace-nowrap hover:text-s1-accent transition-colors';
 
 /** Slim footer under every signed-in console page: licence line plus the links people need while working. */
 export default function ConsoleFooter() {
