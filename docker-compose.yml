@@ -38,7 +38,9 @@ services:
   # Object storage: SeaweedFS (Apache-2.0) with its S3 API on :9090. Data
   # persists in the `seaweeddata` volume; the host port is loopback-only and
   # operators can point OCS at MinIO / AWS S3 / R2 by setting
-  # STORAGE_S3_ENDPOINT (+ credentials) without touching the code.
+  # STORAGE_S3_ENDPOINT (+ credentials) without touching the code. The only
+  # S3 identity is STORAGE_S3_ACCESS_KEY / STORAGE_S3_SECRET_KEY (letters and
+  # digits), the same credentials SynapseOCS signs with.
   s3:
     image: chrislusf/seaweedfs:4.48
     restart: unless-stopped
@@ -446,6 +448,58 @@ services:
       synapseone-net:
         aliases: [storage]
 
+  # Nightly logical Postgres backups (pg_dump custom format of the platform and
+  # Authentik databases, sha256, BACKUP_RETENTION_DAYS) in the pgbackups volume.
+  # Restore: tools/backup/pg-restore.sh <file.dump>.
+  pg-backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/backup/pg-backup.sh"]
+    command: ["--loop"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-synapseone}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-synapseone_password_change_me}
+      BACKUP_DATABASES: ${BACKUP_DATABASES:-${POSTGRES_DB:-synapseone} authentik}
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - ./tools/backup/pg-backup.sh:/backup/pg-backup.sh:ro
+      - pgbackups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [synapseone-net]
+
+  # Daily incremental snapshots of the object store (SynapseOCS files): content
+  # stored once per SHA-256, Content-Type kept, BACKUP_RETENTION_DAYS. Runs in
+  # the OCS image. Restore: docker compose run --rm --no-deps s3-backup restore latest
+  s3-backup:
+    build:
+      context: ./apps/ocs-service
+    image: synapseone/ocs:0.7.1
+    restart: unless-stopped
+    entrypoint: ["node", "/app/s3-backup.mjs"]
+    command: ["loop"]
+    environment:
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-http://s3:9090}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-${S3_BUCKET:-synapseone-core}}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-${S3_REGION:-us-east-1}}
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-${S3_ACCESS_KEY:-test}}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:-${S3_SECRET_KEY:-test}}
+      STORAGE_S3_PATH_STYLE: ${STORAGE_S3_PATH_STYLE:-true}
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - ./tools/backup/s3-backup.mjs:/app/s3-backup.mjs:ro
+      - s3backups:/backups
+    depends_on:
+      s3:
+        condition: service_healthy
+    networks: [synapseone-net]
+
   notifications:
     build:
       context: ./apps/notifications-service
@@ -609,6 +663,8 @@ volumes:
   pgdata:
   redisdata:
   storagedata:
+  pgbackups:
+  s3backups:
   prometheusdata:
 
 networks:

@@ -43,6 +43,10 @@ reads which key (audited from source):
 | `IAM_JWT_SECRET` | — | HS256 for access/service JWTs (≥32 random chars); boot fails in `NODE_ENV=production` when weak/default |
 | `IAM_JWT_EXPIRES_IN` / `IAM_REFRESH_EXPIRES_IN` | 3600 / 2592000 (seconds) | token TTLs (clamped 60–86400 / 3600–315360000; garbage env falls back to default) |
 | `IAM_API_KEY_PEPPER` | — (plain SHA-256) | HMAC pepper for API-key/refresh-token hashes at rest; keys created before the pepper still verify (legacy fallback) |
+| `IAM_MFA_ENCRYPTION_KEY` | — (HKDF of `IAM_JWT_SECRET`) | 32-byte key (hex/base64) sealing TOTP secrets with AES-256-GCM. Set it explicitly in production; changing it invalidates enrolled authenticators |
+| `IAM_MFA_ISSUER` | `SynapseOne` | issuer label in the `otpauth://` URL shown by authenticator apps |
+| `IAM_LOGIN_MAX_FAILURES` / `IAM_LOGIN_LOCKOUT_SECONDS` | `5` / `900` | consecutive wrong passwords or MFA codes before a temporary lock (`429 account_locked` + `Retry-After`); org admins can `POST /v1/users/:id/unlock` |
+| `IAM_LOGIN_RATE_LIMIT_PER_MIN` / `IAM_MFA_RATE_LIMIT_PER_MIN` | `60` / `60` | per-IP request ceiling on `POST /v1/auth/login` and on the MFA, MFA-reset and unlock routes (`429 rate_limited`); complements the per-user lockout |
 | `AUDIT_RETENTION_DAYS` | `0` (disabled) | hourly purge of `audit_log` rows older than N days (batched, clamped 1–3650); prod e.g. `180` |
 | `AUDIT_TRAIL` | `true` | data-plane services (Base/Faststore/Queue/Stream/Workflow/LDS) emit one mutation audit event per write to IAM (`POST /v1/audit/ingest`). Set `false` only in local dev |
 | `AUDIT_INGEST_URL` | `${IAM_SERVICE_URL}/v1/audit/ingest` | override the data-plane audit sink (tests/staging) |
@@ -173,6 +177,18 @@ production), `STORAGE_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY/PATH_STYLE
 `STORAGE_FS_ROOT`, `STORAGE_MAX_OBJECT_BYTES` (25 MiB), `STORAGE_TENANT_QUOTA_BYTES`
 (5 GiB), `STORAGE_ALLOWED_CONTENT_TYPES`.
 
+## Backups (`pg-backup`, `s3-backup` in docker-compose.yml)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `BACKUP_INTERVAL_SECONDS` | `86400` | time between runs of both backup services |
+| `BACKUP_RETENTION_DAYS` | `7` | Postgres dumps and object snapshots older than this are removed (the newest snapshot is always kept) |
+| `BACKUP_DATABASES` | `${POSTGRES_DB} authentik` | space-separated databases `pg-backup` dumps (missing ones are skipped) |
+
+`pg-backup` uses `POSTGRES_USER`/`POSTGRES_PASSWORD`; `s3-backup` uses the same
+`STORAGE_S3_*` settings as OCS. Volumes: `pgbackups`, `s3backups`. See
+`docs/production.md` and `docs/object-storage.md`.
+
 ## Notifications (`apps/notifications-service`)
 
 See `docs/notifications.md`. Key settings: `DATABASE_URL` (required in production),
@@ -192,5 +208,7 @@ See `docs/notifications.md`. Key settings: `DATABASE_URL` (required in productio
 
 Postgres (`POSTGRES_*`; IAM, workflow, LDS and Base), Redis (`REDIS_URL`; gateway
 rate limiting, Faststore and Queue), Authentik (`AUTHENTIK_*`, host ports
-`AUTHENTIK_HTTP_PORT=19000`), S3 (`S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY/SECRET_KEY`,
-`S3_HOST_PORT=9090`).
+`AUTHENTIK_HTTP_PORT=19000`), object storage = SeaweedFS (`s3` service; its only
+identity is `STORAGE_S3_ACCESS_KEY`/`STORAGE_S3_SECRET_KEY`, falling back to
+`S3_ACCESS_KEY`/`S3_SECRET_KEY`; host port `S3_HOST_PORT=9090`; data volume
+`seaweeddata`).

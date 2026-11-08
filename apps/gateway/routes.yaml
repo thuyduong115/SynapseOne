@@ -217,9 +217,9 @@ routes:
   - path: /v1/secrets
     target: ${WORKFLOW_SERVICE_URL:http://workflow:4002}
     auth: either
-    service: workflow
+    service: secrets
     actions:
-      - { method: POST, path: /v1/secrets/*/read, action: workflow:Read }
+      - { method: POST, path: /v1/secrets/*/read, action: secrets:Read }
 
   # SCIM admin token lifecycle (the /scim/v2 data plane carries its own token).
   - path: /v1/scim

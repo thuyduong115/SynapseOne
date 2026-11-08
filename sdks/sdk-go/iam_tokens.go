@@ -68,3 +68,58 @@ func (c *Client) UnassignServiceAccountRole(saID, roleID string) error {
 	_, err := c.do("DELETE", "/v1/service-accounts/"+pathEscape(saID)+"/roles/"+pathEscape(roleID), nil)
 	return err
 }
+
+// VerifyMFA finishes a login that failed with 401 mfa_required. Pass the
+// mfaToken from that error body plus a TOTP code or a recovery code.
+func (c *Client) VerifyMFA(mfaToken, code, recoveryCode string) (map[string]any, error) {
+	body := map[string]any{"mfaToken": mfaToken}
+	if code != "" {
+		body["code"] = code
+	}
+	if recoveryCode != "" {
+		body["recoveryCode"] = recoveryCode
+	}
+	return c.doMap("POST", "/v1/auth/mfa/verify", body)
+}
+
+// MFAStatus returns the current user's MFA status.
+func (c *Client) MFAStatus() (map[string]any, error) {
+	return c.doMap("GET", "/v1/auth/mfa", nil)
+}
+
+// SetupTOTP starts TOTP enrolment (secret + otpauth URL).
+func (c *Client) SetupTOTP() (map[string]any, error) {
+	return c.doMap("POST", "/v1/auth/mfa/totp/setup", map[string]any{})
+}
+
+// EnableTOTP confirms enrolment and returns recovery codes (shown once).
+func (c *Client) EnableTOTP(code string) (map[string]any, error) {
+	return c.doMap("POST", "/v1/auth/mfa/totp/enable", map[string]any{"code": code})
+}
+
+// RegenerateRecoveryCodes replaces the recovery codes (needs a TOTP code).
+func (c *Client) RegenerateRecoveryCodes(code string) (map[string]any, error) {
+	return c.doMap("POST", "/v1/auth/mfa/recovery-codes", map[string]any{"code": code})
+}
+
+// DisableMFA turns MFA off with a TOTP code or a recovery code.
+func (c *Client) DisableMFA(code, recoveryCode string) (map[string]any, error) {
+	body := map[string]any{}
+	if code != "" {
+		body["code"] = code
+	}
+	if recoveryCode != "" {
+		body["recoveryCode"] = recoveryCode
+	}
+	return c.doMap("POST", "/v1/auth/mfa/disable", body)
+}
+
+// ResetUserMFA removes a user's second factor (org admins only).
+func (c *Client) ResetUserMFA(userID string) (map[string]any, error) {
+	return c.doMap("DELETE", "/v1/users/"+pathEscape(userID)+"/mfa", nil)
+}
+
+// UnlockUser clears a sign-in lockout (org admins only).
+func (c *Client) UnlockUser(userID string) (map[string]any, error) {
+	return c.doMap("POST", "/v1/users/"+pathEscape(userID)+"/unlock", map[string]any{})
+}

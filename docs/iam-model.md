@@ -124,6 +124,32 @@ an owner it is an account-level key bounded by its scopes alone. Keys record
 secret stays valid for the grace window, 0 = revoked immediately). Users can list and
 revoke their own sessions (`GET/DELETE /v1/auth/sessions[/:id]`).
 
+## Multi-factor authentication and sign-in lockout (implemented)
+
+Users can add a TOTP authenticator (RFC 6238: SHA-1, 6 digits, 30 s; Google
+Authenticator, Microsoft Authenticator, 2FAS…):
+
+1. `POST /v1/auth/mfa/totp/setup` → `{secret, otpauthUrl}` (show it as a QR code).
+2. `POST /v1/auth/mfa/totp/enable {code}` → 10 single-use recovery codes, shown once.
+3. From then on, password or dev login answers `401 mfa_required` with a 5-minute
+   `mfaToken`; `POST /v1/auth/mfa/verify {mfaToken, code | recoveryCode}` returns the
+   session. The challenge token is signed with a separate key and issuer, so it is
+   never accepted as an access token.
+
+| Property | Behaviour |
+|---|---|
+| Secret at rest | AES-256-GCM, key `IAM_MFA_ENCRYPTION_KEY` (or HKDF of `IAM_JWT_SECRET`) |
+| Replay | each TOTP time step is accepted once (`user_mfa.last_step`) |
+| Recovery codes | 10 × `xxxx-xxxx`, SHA-256 hashed, single use, regenerate with a TOTP code |
+| Lockout | `IAM_LOGIN_MAX_FAILURES` (5) wrong passwords **or** MFA codes → `429 account_locked` for `IAM_LOGIN_LOCKOUT_SECONDS` (900); unknown emails are never locked |
+| Rate limit | per IP on login and MFA routes (`IAM_LOGIN_RATE_LIMIT_PER_MIN`, `IAM_MFA_RATE_LIMIT_PER_MIN`, 60) |
+| Lost device | an org admin calls `DELETE /v1/users/:id/mfa`; `POST /v1/users/:id/unlock` clears a lockout |
+| SSO | OIDC sign-ins rely on the identity provider's own MFA |
+
+Tables: `user_mfa` and the `users.failed_login_count` / `users.locked_until` columns
+(migration `0006_mfa_lockout`). Every enable, disable, reset, failed second factor and
+lockout is written to the audit log.
+
 ## Organization administrators
 
 The first user of an organization becomes its administrator (`is_org_admin`, AWS
