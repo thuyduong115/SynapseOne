@@ -30,6 +30,7 @@ Format based on Keep a Changelog; versioning follows SemVer.
 - OCS S3 client decodes XML character references in listed keys, ETags,
   continuation tokens and multipart upload IDs. On SeaweedFS, keys containing `&`
   were listed as `&amp;` and ETags as `&#34;…&#34;`.
+
 ### Added
 - **SynapseBase Graph**: tenant-scoped property graph
   (`synapseone_base_graph_nodes`/`_edges`) with node/edge upsert, bounded
