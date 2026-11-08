@@ -356,8 +356,28 @@ export function createApp(backend: Backend = createBackend()): express.Express {
   return app;
 }
 
+function warnProductionStorage(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (process.env.STORAGE_BACKEND !== 's3') return;
+  const endpoint = (process.env.STORAGE_S3_ENDPOINT || '').trim();
+  // The bundled SeaweedFS/MinIO endpoints are real S3-compatible stores on the
+  // private Docker network; only flag the known adobe/s3mock test double.
+  const isMock = /s3mock|adobe|localhost|127\.0\.0\.1|\[::1\]/i.test(endpoint);
+  if (isMock) {
+    const banner = '='.repeat(72);
+    console.error(banner);
+    console.error('[storage] WARNING: production object storage is pointed at a test mock');
+    console.error('[storage] endpoint: ' + endpoint);
+    console.error('[storage] This is NOT durable production storage. Configure a real S3-compatible');
+    console.error('[storage] endpoint (bundled SeaweedFS, MinIO, AWS S3 or Cloudflare R2) via');
+    console.error('[storage] STORAGE_S3_ENDPOINT with matching STORAGE_S3_ACCESS_KEY/SECRET_KEY.');
+    console.error(banner);
+  }
+}
+
 if (require.main === module) {
   const app = createApp();
+  warnProductionStorage();
   const server = app.listen(PORT, () => console.log(`[ocs] SynapseOCS listening on :${PORT}`));
   const shutdown = () => server.close(() => process.exit(0));
   process.on('SIGTERM', shutdown);

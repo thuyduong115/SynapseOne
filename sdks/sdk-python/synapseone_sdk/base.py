@@ -188,6 +188,109 @@ class BaseService:
         """Bind a collection name (plus optional model/mapping) for typed use."""
         return BaseCollection(self, name, model=model, mapping=mapping)
 
+    # ---- graph (property graph per collection) ----
+    def graph_upsert_nodes(self, collection: str, nodes: list) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/graph/nodes",
+            {"nodes": nodes},
+        )
+
+    def graph_upsert_edges(self, collection: str, edges: list) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/graph/edges",
+            {"edges": edges},
+        )
+
+    def graph_node(
+        self, collection: str, node_id: str, depth: int = 1, limit: int = 200
+    ) -> dict:
+        qs = urlencode({"depth": depth, "limit": limit})
+        return self._req(
+            "GET",
+            f"/v1/base/collections/{quote(collection, safe='')}/graph/nodes/{quote(node_id, safe='')}?{qs}",
+        )
+
+    def graph_query(
+        self,
+        collection: str,
+        start: list[str],
+        depth: int = 1,
+        limit: int = 200,
+        edge_types: list[str] | None = None,
+    ) -> dict:
+        body = {"start": start, "depth": depth, "limit": limit}
+        if edge_types:
+            body["edgeTypes"] = edge_types
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/graph/query",
+            body,
+        )
+
+    def graph_stats(self, collection: str) -> dict:
+        return self._req(
+            "GET", f"/v1/base/collections/{quote(collection, safe='')}/graph/stats"
+        )
+
+    def graph_delete_node(self, collection: str, node_id: str) -> dict:
+        return self._req(
+            "DELETE",
+            f"/v1/base/collections/{quote(collection, safe='')}/graph/nodes/{quote(node_id, safe='')}",
+        )
+
+    # ---- GIS (PostGIS GeoJSON per collection) ----
+    def geo_upsert(self, collection: str, features: list) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/geo/features",
+            {"features": features},
+        )
+
+    def geo_list(
+        self, collection: str, bbox: str | None = None, limit: int = 200
+    ) -> dict:
+        params: dict[str, Any] = {"limit": limit}
+        if bbox:
+            params["bbox"] = bbox
+        return self._req(
+            "GET",
+            f"/v1/base/collections/{quote(collection, safe='')}/geo/features?{urlencode(params)}",
+        )
+
+    def geo_near(
+        self,
+        collection: str,
+        lat: float,
+        lng: float,
+        radius_meters: float,
+        limit: int = 200,
+    ) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/geo/near",
+            {"lat": lat, "lng": lng, "radiusMeters": radius_meters, "limit": limit},
+        )
+
+    def geo_within(self, collection: str, geometry: dict, limit: int = 200) -> dict:
+        return self._req(
+            "POST",
+            f"/v1/base/collections/{quote(collection, safe='')}/geo/within",
+            {"geometry": geometry, "limit": limit},
+        )
+
+    def geo_stats(self, collection: str) -> dict:
+        return self._req(
+            "GET", f"/v1/base/collections/{quote(collection, safe='')}/geo/stats"
+        )
+
+    def geo_delete(self, collection: str, feature_id: str) -> dict:
+        return self._req(
+            "DELETE",
+            f"/v1/base/collections/{quote(collection, safe='')}/geo/features/{quote(feature_id, safe='')}",
+        )
+
     # ---- collections ----
     def list_collections(
         self, org_id: str | None = None, account_id: str | None = None

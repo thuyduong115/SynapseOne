@@ -6,8 +6,11 @@
 SynapseOCS (Object Cloud Storage) is the Tier-1 bucket-aware object store. It
 speaks its own `/v1/ocs` API at the gateway and keeps the original
 `/v1/storage` API as the default-bucket compatibility surface. Bytes live in an
-S3-compatible backend (SeaweedFS in Compose, or AWS S3) in production and on a local
-filesystem for development/single-node deployments.
+S3-compatible backend: the compose stack bundles **SeaweedFS** (Apache-2.0,
+S3 API on `http://s3:9090`, data in the `seaweeddata` volume); MinIO, AWS S3
+and Cloudflare R2 are drop-in alternatives configured purely through
+`STORAGE_S3_*`. OCS fails closed when `STORAGE_S3_ENDPOINT` is unset and logs
+a loud warning if the endpoint is an `adobe/s3mock` test double.
 
 ## Capabilities
 
@@ -86,7 +89,7 @@ tenant/bucket/key/method; hand it only to the intended client. The legacy
 | --- | --- | --- |
 | `STORAGE_BACKEND` | `fs` | `s3` (required by the boot guard) |
 | `STORAGE_FS_ROOT` | `/data` (volume) | — |
-| `STORAGE_S3_ENDPOINT` | `http://s3:9090` | `http://s3:9090` (SeaweedFS in the prod overlay) or an AWS S3 HTTPS endpoint |
+| `STORAGE_S3_ENDPOINT` | `http://s3:9090` (bundled SeaweedFS) | `http://s3:9090` (SeaweedFS in the prod overlay) or an external MinIO/AWS S3/R2 HTTPS endpoint |
 | `STORAGE_S3_BUCKET` | `synapseone-core` | dedicated bucket |
 | `STORAGE_S3_ACCESS_KEY` / `_SECRET_KEY` | `test`/`test` | scoped credentials |
 | `STORAGE_S3_REGION` | `us-east-1` | backend region |
@@ -96,8 +99,10 @@ Compose runs **SeaweedFS** (`chrislusf/seaweedfs:4.48`, Apache-2.0) as the `s3`
 service in development and production: OCS uses `STORAGE_S3_ENDPOINT=http://s3:9090`
 with `STORAGE_S3_PATH_STYLE=true`. SeaweedFS uses `STORAGE_S3_ACCESS_KEY` /
 `STORAGE_S3_SECRET_KEY` as its only identity (letters and digits; `test`/`test` in
-dev), keeps data in the `seaweeddata` volume, and the prod overlay requires real
-keys and removes the host port.
+dev), keeps data in the `seaweeddata` volume, and the host port is loopback-only
+(the prod overlay requires real keys and removes the host port). To use an external
+store, point `STORAGE_S3_ENDPOINT` at MinIO/AWS S3/R2 with matching credentials
+and keep `STORAGE_S3_PATH_STYLE=true` (MinIO/SeaweedFS) or `false` (AWS).
 
 Earlier releases used S3Mock, which deletes its files whenever the container stops,
 so a deployment upgrading from it has no durable objects to carry over: OCS buckets

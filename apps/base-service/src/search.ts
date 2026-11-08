@@ -22,6 +22,8 @@ export interface SearchRecord {
   body: string;
   acl: string[];
   embedding: number[];
+  /** Real 384-d embedding from Tier-1 inference (pgvector); absent in the memory fallback. */
+  vector?: number[] | null;
   metadata: Record<string, unknown>;
   updated_at: string;
 }
@@ -56,6 +58,49 @@ export function embed(text: string): number[] {
   }
   const norm = Math.sqrt(vec.reduce((n, v) => n + v * v, 0)) || 1;
   return vec.map((v) => Number((v / norm).toFixed(6)));
+}
+
+const REAL_DIM = 384;
+let vectorReady: boolean | null = null;
+
+/** True when the search table has a pgvector column + ANN index. */
+export async function ensureVectorColumn(): Promise<boolean> {
+  if (!useDb()) return false;
+  if (vectorReady !== null) return vectorReady;
+  try {
+    await pgQuery('CREATE EXTENSION IF NOT EXISTS vector');
+    await pgQuery(`ALTER TABLE synapseone_search_index ADD COLUMN IF NOT EXISTS embedding_vec vector(${REAL_DIM})`);
+    await pgQuery('CREATE INDEX IF NOT EXISTS idx_search_embedding_vec ON synapseone_search_index USING hnsw (embedding_vec vector_cosine_ops)');
+    vectorReady = true;
+  } catch (error) {
+    vectorReady = false;
+    console.warn('[base][search] pgvector unavailable, using hashed embeddings:', (error as Error).message);
+  }
+  return vectorReady;
+}
+
+/** Embed text with the Tier-1 inference service (all-MiniLM-L6-v2, 384-d). */
+export async function embedTextAsync(text: string): Promise<number[] | null> {
+  const base = String(process.env.INFERENCE_SERVICE_URL || '').replace(/\/$/, '');
+  if (!base) return null;
+  try {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (process.env.SYNAPSEONE_API_KEY) headers['x-api-key'] = process.env.SYNAPSEONE_API_KEY;
+    if (process.env.SYNAPSEONE_INTERNAL_SECRET) headers['x-synapseone-internal'] = process.env.SYNAPSEONE_INTERNAL_SECRET;
+    const response = await fetch(`${base}/v1/inference/embeddings`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: String(text || '').slice(0, 8000) }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return null;
+    const body: any = await response.json();
+    const vector = body?.data?.[0]?.embedding ?? body?.embeddings?.[0] ?? body?.embedding;
+    if (!Array.isArray(vector) || vector.length !== REAL_DIM) return null;
+    return vector.map(Number);
+  } catch {
+    return null;
+  }
 }
 
 export function cosine(a: number[], b: number[]): number {
@@ -126,21 +171,23 @@ export async function replaceCollectionIndex(collection: StoredCollection, docum
   const records = documents.map((doc) => projectDocument(collection, doc));
   const ids = records.map((r) => r.id);
   if (useDb()) {
+    const vectors = await ensureVectorColumn();
     await pgQuery('DELETE FROM synapseone_search_index WHERE collection_id = $1 AND id <> ALL($2::text[])', [collection.id, ids]);
     for (const r of records) {
+      const real = vectors ? await embedTextAsync(`${r.title} ${r.body}`) : null;
       await pgQuery(
         `INSERT INTO synapseone_search_index
-           (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now())
+           (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at, embedding_vec)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now(),$13::vector)
          ON CONFLICT (id) DO UPDATE SET
            collection_name = EXCLUDED.collection_name, org_id = EXCLUDED.org_id, account_id = EXCLUDED.account_id,
            title = EXCLUDED.title, body = EXCLUDED.body, acl = EXCLUDED.acl,
            embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata,
-           updated_at = EXCLUDED.updated_at, indexed_at = now()`,
+           updated_at = EXCLUDED.updated_at, indexed_at = now(), embedding_vec = EXCLUDED.embedding_vec`,
         [
           r.id, r.collection_id, r.collection_name, r.document_id, r.org_id, r.account_id, r.title, r.body,
           JSON.stringify(r.acl), JSON.stringify(r.embedding), JSON.stringify(r.metadata),
-          r.updated_at,
+          r.updated_at, real ? JSON.stringify(real) : null,
         ],
       );
     }
@@ -163,17 +210,20 @@ export async function upsertDocumentIndex(collection: StoredCollection, document
   const r = projectDocument(collection, document);
   memIndex.set(r.id, r);
   if (useDb()) {
+    const vectors = await ensureVectorColumn();
+    const real = vectors ? await embedTextAsync(`${r.title} ${r.body}`) : null;
     await pgQuery(
       `INSERT INTO synapseone_search_index
-         (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now())
+         (id, collection_id, collection_name, document_id, org_id, account_id, title, body, acl, embedding, metadata, updated_at, indexed_at, embedding_vec)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::timestamptz,now(),$13::vector)
        ON CONFLICT (id) DO UPDATE SET
          collection_name = EXCLUDED.collection_name, org_id = EXCLUDED.org_id, account_id = EXCLUDED.account_id,
          title = EXCLUDED.title, body = EXCLUDED.body, acl = EXCLUDED.acl,
          embedding = EXCLUDED.embedding, metadata = EXCLUDED.metadata,
-         updated_at = EXCLUDED.updated_at, indexed_at = now()`,
+         updated_at = EXCLUDED.updated_at, indexed_at = now(), embedding_vec = EXCLUDED.embedding_vec`,
       [r.id, r.collection_id, r.collection_name, r.document_id, r.org_id, r.account_id, r.title, r.body,
-        JSON.stringify(r.acl), JSON.stringify(r.embedding), JSON.stringify(r.metadata), r.updated_at],
+        JSON.stringify(r.acl), JSON.stringify(r.embedding), JSON.stringify(r.metadata), r.updated_at,
+        real ? JSON.stringify(real) : null],
     );
   }
 }
@@ -346,9 +396,14 @@ export async function searchRecords(scope: SearchScope, query: string, opts: Sea
   }
 
   const qvec = embed(terms.join(' '));
+  const qvecReal = mode === 'semantic' || mode === 'hybrid' ? await embedTextAsync(query) : null;
   const scored = rows.map((record) => {
     const full = scoreFulltext(record, terms);
-    const semantic = mode === 'semantic' || mode === 'hybrid' ? Math.max(0, cosine(qvec, record.embedding)) : 0;
+    const semantic = mode === 'semantic' || mode === 'hybrid'
+      ? (qvecReal && record.vector && record.vector.length === qvecReal.length
+        ? Math.max(0, cosine(qvecReal, record.vector))
+        : Math.max(0, cosine(qvec, record.embedding)))
+      : 0;
     const score = mode === 'semantic'
       ? semantic
       : mode === 'hybrid'

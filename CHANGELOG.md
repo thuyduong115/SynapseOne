@@ -30,6 +30,58 @@ Format based on Keep a Changelog; versioning follows SemVer.
 - OCS S3 client decodes XML character references in listed keys, ETags,
   continuation tokens and multipart upload IDs. On SeaweedFS, keys containing `&`
   were listed as `&amp;` and ETags as `&#34;…&#34;`.
+### Added
+- **SynapseBase Graph**: tenant-scoped property graph
+  (`synapseone_base_graph_nodes`/`_edges`) with node/edge upsert, bounded
+  recursive-CTE traversal (depth <= 5) and graph stats.
+- **SynapseBase GIS**: PostGIS `geometry(Geometry,4326)` features with a GiST
+  index plus bbox, radius-metres, polygon and extent queries.
+- **Real vector search**: the search index stores 384-d inference embeddings in
+  `embedding_vec vector(384)` with an HNSW cosine index; hashed 64-d vectors
+  remain the offline fallback.
+- JS and Python SDK graph/GIS methods, released as `@synapseone/sdk@0.9.0`,
+  `@synapseone/cli@0.9.0` and `synapseone-sdk==0.9.0` on npm/PyPI.
+
+### Changed
+- The platform Postgres image is now
+  `synapseone/postgres:16-pgvector-postgis` (pgvector + PostGIS 3) and the
+  initialisation SQL enables both extensions.
+- TLS edge now serves `contribution.synapsecity.sbs` (OpenInfra GISTool data
+  contribution portal): HTTPS server block, `/api/` proxy to the backend,
+  ACME/HTTP redirect, and the host added to the Let's Encrypt certificate.
+
+### Changed
+- The bundled object store is now **SeaweedFS** (real S3 semantics, persistent
+  `seaweeddata` volume, loopback-only host port) instead of the `adobe/s3mock`
+  test double. SynapseOCS, the backup sidecar and the `s3-init` bucket probe
+  keep the same `http://s3:9090` endpoint and `STORAGE_S3_*` credentials, so an
+  external MinIO/AWS S3/R2 backend remains a pure env swap.
+
+### Security
+- Tenant webhooks are SSRF-guarded: notification `webhook` deliveries resolve
+  DNS, reject private/loopback/link-local/CGNAT/metadata targets and refuse
+  redirects, so a tenant cannot make Tier-1 call internal services
+  (`notifications-service/src/ssrf.ts`).
+- Internal-only ingest endpoints (`/v1/audit/ingest`, `/v1/usage/ingest`) and
+  `/v1/keys/verify` are no longer reachable through the public gateway; IAM
+  additionally rejects them when an end-user credential or principal header is
+  present, closing audit/usage forgery and key-probing with a tenant token.
+- Dependency security updates: body-parser 1.20.9, follow-redirects 1.16.2,
+  qs 6.16.2, zod 4.6.7 (with the Zod v4 `z.record` migration) and
+  react-router-dom 7.18.5. Production `npm audit` is clean.
+- Notification queue consumer fix: SynapseQueue returns message fields at the
+  top level, so the previous `item.message.payload` read silently acked and
+  dropped every queued notification. Delivery now accepts both shapes.
+
+
+### Security
+- SynapseOCS fails closed when `STORAGE_S3_ENDPOINT` is unset and logs a loud
+  production warning when the configured endpoint is a private/`http://` test
+  mock (`adobe/s3mock`). Production must point at a real S3-compatible backend
+  (MinIO/AWS S3/Cloudflare R2); the bundled mock is documented as dev-only.
+- Compose no longer hardcodes the mock URL as the OCS storage default: the
+  service inherits `S3_ENDPOINT`/`STORAGE_S3_ENDPOINT` and runs with
+  `NODE_ENV=production`, so the boot guard is effective.
 
 ### Added
 - Durable human tasks / wait-for-signal (`/v1/human-tasks`, `humanTask` node)

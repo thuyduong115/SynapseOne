@@ -604,6 +604,24 @@ export function createApp(): express.Express {
   // Stamped x-synapseone-* headers are trusted ONLY when the secret is set:
   // without it, direct callers could spoof any tenant header (dev default).
   const TRUST_STAMPED = INTERNAL_SECRET.length > 0;
+
+  /**
+   * True when the request carries an end-user credential or gateway-stamped
+   * principal headers. Internal-only ingest/verify endpoints must never be
+   * reachable with these: the gateway forwards the original Authorization and
+   * stamps the internal secret on every proxied request, so an ordinary
+   * tenant could otherwise forge audit/usage rows or probe API keys.
+   */
+  function hasEndUserCredential(req: express.Request): boolean {
+    if (firstHeader(req.headers.authorization as any)) return true;
+    if (firstHeader(req.headers['x-api-key'] as any)) return true;
+    for (const h of ['x-synapseone-user', 'x-synapseone-org', 'x-synapseone-account', 'x-synapseone-kind']) {
+      if (firstHeader(req.headers[h] as any)) return true;
+      const legacy = h.replace('x-synapseone-', 'x-synapsedx-');
+      if (firstHeader(req.headers[legacy] as any)) return true;
+    }
+    return false;
+  }
 /** Fire-and-forget mutation audit trail (#32), scoped to the caller's org. */
 async function auditMutation(req: express.Request, action: string, resource: string, extra: Record<string, unknown> = {}): Promise<void> {
   const [org, user] = await Promise.all([
@@ -2063,7 +2081,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
     }),
     action: z.string().min(1).max(512),
     resource: z.string().min(1).max(2048),
-    context: z.record(z.any()).nullish(),
+    context: z.record(z.string(), z.unknown()).nullish(),
   });
   app.post('/internal/authorize', async (req, res) => {
     const parsed = principalSchema.safeParse(req.body);
@@ -2293,7 +2311,11 @@ async function auditMutation(req: express.Request, action: string, resource: str
     res.json(await listApiKeys(req.params.accountId));
   });
 
-  app.post('/v1/keys/verify', async (req, res) => {    const rec = await verifyApiKey((req.body || {}).apiKey || '');
+  app.post('/v1/keys/verify', async (req, res) => {
+    if (hasEndUserCredential(req)) {
+      return res.status(403).json({ error: 'forbidden', message: 'internal endpoint: end-user credentials are not accepted' });
+    }
+    const rec = await verifyApiKey((req.body || {}).apiKey || '');
     if (!rec) return res.status(401).json({ valid: false });
     // Include the owning org: the gateway uses this for usage attribution (#28).
     const acc = rec.account_id ? await getAccountById(rec.account_id) : null;
@@ -2580,7 +2602,7 @@ async function auditMutation(req: express.Request, action: string, resource: str
       result: z.enum(['allowed', 'denied', 'error']),
       statusCode: z.number().int().min(100).max(599),
       requestId: z.string().max(128).optional().default(''),
-      context: z.record(z.unknown()).optional(),
+      context: z.record(z.string(), z.unknown()).optional(),
     })).min(1).max(200),
   });
   app.post('/v1/audit/ingest', async (req, res) => {
@@ -2589,6 +2611,9 @@ async function auditMutation(req: express.Request, action: string, resource: str
       if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
         return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid internal credential' });
       }
+    }
+    if (hasEndUserCredential(req)) {
+      return res.status(403).json({ error: 'forbidden', message: 'internal endpoint: end-user credentials are not accepted' });
     }
     const parsed = auditIngestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2656,6 +2681,9 @@ async function auditMutation(req: express.Request, action: string, resource: str
       if (!got || !secretsEqual(got, INTERNAL_SECRET)) {
         return res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid internal credential' });
       }
+    }
+    if (hasEndUserCredential(req)) {
+      return res.status(403).json({ error: 'forbidden', message: 'internal endpoint: end-user credentials are not accepted' });
     }
     const parsed = usageIngestSchema.safeParse(req.body);
     if (!parsed.success) {
