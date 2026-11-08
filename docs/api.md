@@ -467,6 +467,47 @@ writes and a change feed. Full guide: [synapsebase.md](synapsebase.md).
 - `GET /v1/base/collections/:collection/changes?since=&limit=100&as=` — upserts
   only (`deleted` is always false); reuse `nextSince`
 
+### SynapseBase Graph (Tier-1 property graph)
+
+Nodes and typed edges live beside the collection in Postgres; traversal is a
+bounded recursive CTE (depth <= 5, limit <= 1000), so a query cannot walk the
+whole graph. JS/Python SDK: `base.graphUpsertNodes`, `graphUpsertEdges`,
+`graphNode`, `graphQuery`, `graphStats`, `graphDeleteNode` / snake_case
+equivalents.
+
+- `POST /v1/base/collections/:collection/graph/nodes {nodes:[{id, labels[], properties}]}`
+  — upsert up to 1000 nodes
+- `POST /v1/base/collections/:collection/graph/edges {edges:[{id?, from, to, type, properties?}]}`
+  — upsert up to 2000 edges; endpoints must already exist
+- `GET /v1/base/collections/:collection/graph/nodes/:id?depth=2&limit=200`
+  — node + bounded BFS subgraph (`next` when truncated)
+- `POST /v1/base/collections/:collection/graph/query {start[], depth?, edgeTypes?, limit?}`
+  — multi-start traversal
+- `GET /v1/base/collections/:collection/graph/stats` → `{nodes, edges}`
+- `DELETE /v1/base/collections/:collection/graph/nodes/:id` — cascade incident edges
+
+### SynapseBase GIS (PostGIS)
+
+Features are stored as `geometry(Geometry,4326)` with a GiST index; property
+payloads stay in `jsonb`. JS/Python SDK: `base.geoUpsert`, `geoList`, `geoNear`,
+`geoWithin`, `geoStats`, `geoDelete` / snake_case equivalents.
+
+- `POST /v1/base/collections/:collection/geo/features {features:[{id, properties, geometry}]}`
+  — upsert up to 1000 GeoJSON features (Point/LineString/Polygon/Multi*/Collection)
+- `GET /v1/base/collections/:collection/geo/features?bbox=minLng,minLat,maxLng,maxLat&limit=200`
+  — bbox query (`&&` on the GiST index)
+- `POST /v1/base/collections/:collection/geo/near {lat, lng, radiusMeters, limit?}`
+  — metres via `geography`, returns `distanceMeters`
+- `POST /v1/base/collections/:collection/geo/within {geometry, limit?}`
+  — polygon/multipolygon containment
+- `GET /v1/base/collections/:collection/geo/stats` → `{features, extent}`
+- `DELETE /v1/base/collections/:collection/geo/features/:id`
+
+Vector: `/v1/search` stores real 384-d inference embeddings in
+`embedding_vec vector(384)` with an HNSW cosine index; `semantic` and `hybrid`
+modes use it and fall back to the local hashed embedding when inference is
+unavailable.
+
 Mapping shape: `{fields: {logical: {path, type?, required?}}, additional?}` or the
 shorthand `{logical: "dot.path"}`. Types `string|number|boolean|date|array|object|any`;
 `additional:false` rejects undeclared keys on object writes. Write `object` to store

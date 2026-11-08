@@ -645,6 +645,13 @@ export function createApp(): express.Express {
   app.use(((req: express.Request, res: express.Response, next: express.NextFunction) => {
     const urlPath = req.path; // pathname, không query
     if (urlPath === '/' || urlPath === '/health' || urlPath === '/metrics' || urlPath === '/ready') return next();
+    // Service-to-service endpoints: never reachable through the public gateway,
+    // even with a valid tenant credential. Internal callers hit the services
+    // directly over the Docker network.
+    const INTERNAL_ONLY_PATHS = new Set(['/v1/audit/ingest', '/v1/usage/ingest', '/v1/keys/verify']);
+    if (INTERNAL_ONLY_PATHS.has(urlPath)) {
+      return res.status(404).json({ error: 'not_found', message: 'No gateway route matched' });
+    }
     const route = findRoute(routes, urlPath);
     if (!route) return res.status(404).json({ error: 'not_found', message: 'No gateway route matched' });
     (req as any).synapseoneRoute = route;

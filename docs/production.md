@@ -61,7 +61,6 @@ Use when taking SynapseOne off your laptop. Every item already has a mechanism â
       copying them elsewhere is the operator's choice.
 - [ ] Object storage: set `STORAGE_BACKEND=s3` plus `STORAGE_S3_*` credentials (they are
       also the SeaweedFS identity, `docs/object-storage.md`). Set
-      `STORAGE_MAX_OBJECT_BYTES`/`STORAGE_TENANT_QUOTA_BYTES` for your plan.
 - [ ] IAM: set `IAM_MFA_ENCRYPTION_KEY` (`openssl rand -hex 32`) before users enrol MFA;
       keep `IAM_LOGIN_MAX_FAILURES`/`IAM_LOGIN_LOCKOUT_SECONDS` at their defaults or stricter.
 - [ ] Notifications: set `DATABASE_URL`, `NOTIFICATIONS_QUEUE_URL`,

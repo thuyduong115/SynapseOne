@@ -687,6 +687,26 @@ Document methods: `createDocument`, `getDocument` (`as: 'data' | 'object'`),
 The typed `BaseCollection` takes `mapping` as `{logical: 'dot.path'}` for the
 raw-data endpoints (list/increment/changes) and sends writes as `object`.
 
+Graph and GIS methods live on the same service:
+
+```ts
+await c.base.graphUpsertNodes('knowledge', [
+  { id: 'doc:1', labels: ['Document'], properties: { title: 'Bão số 12' } },
+]);
+await c.base.graphUpsertEdges('knowledge', [
+  { from: 'doc:1', to: 'province:hanoi', type: 'MENTIONS' },
+]);
+const sub = await c.base.graphNode('knowledge', 'doc:1', { depth: 2 });
+const stats = await c.base.graphStats('knowledge');
+
+await c.base.geoUpsert('knowledge', [{
+  id: 'p1', properties: { name: 'Hà Nội' },
+  geometry: { type: 'Point', coordinates: [105.85, 21.03] },
+}]);
+const nearby = await c.base.geoNear('knowledge', { lat: 21.03, lng: 105.85, radiusMeters: 5000 });
+const extent = await c.base.geoStats('knowledge');
+```
+
 ### Synapse Faststore (`c.faststore`)
 
 Redis-backed strings, counters, hashes, lists, sets, sorted sets, scans, batches
